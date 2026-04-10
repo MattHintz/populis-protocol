@@ -1,0 +1,45 @@
+; Condition Codes
+; These constants define the condition codes used in Chialisp for various operations.
+
+(
+    ;; Signature conditions
+    (defconstant AGG_SIG_UNSAFE 49) ; Aggregated signature (unsafe)
+    (defconstant AGG_SIG_ME 50) ; Aggregated signature with specific public key
+
+    ;; Coin creation and reservation conditions
+    (defconstant CREATE_COIN 51) ; Create a new coin
+    (defconstant RESERVE_FEE 52) ; Reserve a fee
+
+    ;; Announcement conditions for inter-coin communication
+
+    ;; Coin announcements
+    (defconstant CREATE_COIN_ANNOUNCEMENT 60) ; Create a coin announcement
+    (defconstant ASSERT_COIN_ANNOUNCEMENT 61) ; Assert a coin announcement
+
+    ;; Puzzle announcements
+    (defconstant CREATE_PUZZLE_ANNOUNCEMENT 62) ; Create a puzzle announcement
+    (defconstant ASSERT_PUZZLE_ANNOUNCEMENT 63) ; Assert a puzzle announcement
+
+    ;; CHIP-25 message conditions (secure inter-coin communication)
+    (defconstant SEND_MESSAGE 66) ; Send a message (mode msg ...dest_args)
+    (defconstant RECEIVE_MESSAGE 67) ; Receive a message (mode msg ...source_args)
+
+    ;; Conditions for coins to inquire about themselves
+    (defconstant ASSERT_MY_COIN_ID 70) ; Assert the coin's ID
+    (defconstant ASSERT_MY_PARENT_ID 71) ; Assert the coin's parent ID
+    (defconstant ASSERT_MY_PUZZLEHASH 72) ; Assert the coin's puzzle hash
+    (defconstant ASSERT_MY_AMOUNT 73) ; Assert the coin's amount
+
+    ;; Time-based conditions to ensure that we're "far enough" in the future
+
+    ;; Wall-clock time
+    (defconstant ASSERT_SECONDS_RELATIVE 80) ; Assert relative seconds
+    (defconstant ASSERT_SECONDS_ABSOLUTE 81) ; Assert absolute seconds
+
+    ;; Block index
+    (defconstant ASSERT_HEIGHT_RELATIVE 82) ; Assert relative block height
+    (defconstant ASSERT_HEIGHT_ABSOLUTE 83) ; Assert absolute block height
+
+    ;; A condition that is always true and always ignores all arguments
+    (defconstant REMARK 1) ; Remark condition
+)

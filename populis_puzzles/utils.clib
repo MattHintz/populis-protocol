@@ -1,0 +1,17 @@
+(
+  ;; Include necessary utility libraries
+  (include curry.clib)
+  (include sha256tree.clib)
+
+  ;; Return the full puzzle hash for a singleton with the inner puzzle curried in
+  ;; Parameters:
+  ;; - SINGLETON_STRUCT: The structure of the singleton
+  ;; - inner_puzzle_hash: The hash of the inner puzzle to be curried in
+  (defun-inline calculate_full_puzzle_hash (SINGLETON_STRUCT inner_puzzle_hash)
+    (curry_hashes (f SINGLETON_STRUCT)
+      ;; Calculate the singleton struct
+      (sha256tree SINGLETON_STRUCT)
+      inner_puzzle_hash
+    )
+  )
+)

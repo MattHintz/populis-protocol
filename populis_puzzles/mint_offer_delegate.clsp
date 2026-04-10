@@ -1,0 +1,60 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Mint offer delegate — eve (first) inner puzzle for a freshly minted deed.
+;;;
+;;; After governance quorum approves a mint and the launcher creates the deed
+;;; singleton, this puzzle is the deed's initial inner puzzle.  It represents
+;;; an on-chain standing offer: anyone can purchase the deed by co-spending an
+;;; ephemeral purchase_payment coin that enforces par-value payment to the
+;;; protocol.
+;;;
+;;; On spend the deed transitions to SMART_DEED_INNER_HASH, making it a
+;;; fully gated smart deed (deposit / redeem / settlement only via pool).
+;;;
+;;; Curried parameters:
+;;;   SMART_DEED_INNER_HASH — tree hash of smart_deed_inner curried with
+;;;                           this deed's metadata (known at mint time)
+;;;   PURCHASE_MOD_HASH     — tree hash of the purchase_payment.clsp module
+;;;   PAR_VALUE             — price in mojos
+;;;   PROTOCOL_PUZHASH      — puzzle hash that receives payment
+;;;
+;;; Solution parameters:
+;;;   my_id — coin ID of this singleton coin (for ASSERT_MY_COIN_ID)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(mod (SMART_DEED_INNER_HASH PURCHASE_MOD_HASH PAR_VALUE PROTOCOL_PUZHASH
+      ;; --- solution ---
+      my_id)
+
+    (include condition_codes.clib)
+    (include utils.clib)
+    (include utility_macros.clib)
+
+    (defconstant PURCHASE_MSG_PREFIX 0x50555243) ; ASCII "PURC" — must match purchase_payment.clsp
+
+    ;; Compute the full puzzle hash of the purchase_payment coin from its
+    ;; curried parameters.  Mode 0x10 commits the sender's puzzle hash, so the
+    ;; deed can verify that the message came from a genuine purchase_payment
+    ;; coin with the correct PAR_VALUE and PROTOCOL_PUZHASH.
+    (defun-inline compute_purchase_puzhash (PURCHASE_MOD_HASH PAR_VALUE PROTOCOL_PUZHASH)
+        (curry_hashes PURCHASE_MOD_HASH
+            (sha256 1 PAR_VALUE)
+            (sha256 1 PROTOCOL_PUZHASH))
+    )
+
+    (assert
+        (is-size-b32 my_id)
+        (list
+            (list ASSERT_MY_COIN_ID my_id)
+            ;; Transition the deed singleton to the gated smart_deed_inner
+            (list CREATE_COIN SMART_DEED_INNER_HASH 1 (list SMART_DEED_INNER_HASH))
+            ;; Verify that a purchase_payment coin with matching PAR_VALUE and
+            ;; PROTOCOL_PUZHASH was spent in this block and sent the expected
+            ;; CHIP-25 message.
+            (list RECEIVE_MESSAGE 0x10
+                (concat PROTOCOL_PREFIX (sha256tree (list PURCHASE_MSG_PREFIX PAR_VALUE PROTOCOL_PUZHASH)))
+                (compute_purchase_puzhash PURCHASE_MOD_HASH PAR_VALUE PROTOCOL_PUZHASH))
+            ;; Driver hints for puzzle reconstruction
+            (list REMARK PROTOCOL_PREFIX "MINT_PURCHASE" SMART_DEED_INNER_HASH PAR_VALUE PROTOCOL_PUZHASH)
+        )
+    )
+)

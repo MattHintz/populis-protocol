@@ -1,0 +1,207 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Governance singleton inner puzzle for Populis Protocol.
+;;; Manages on-chain proposals, voting, and execution for pool parameters
+;;; and settlement approvals.
+;;;
+;;; Curried parameters (immutable):
+;;;   MOD_HASH — self-reference for state recreation via curry_hashes
+;;;   SINGLETON_STRUCT — standard singleton struct
+;;;   PROTOCOL_DID_PUZHASH — protocol DID puzzle hash (authority gate)
+;;;   QUORUM_BPS — minimum vote weight in basis points (e.g. 5000 = 50%)
+;;;
+;;; Curried state (changes each spend via curry_hashes recreation):
+;;;   PROPOSAL_HASH — hash of active proposal (0 = none)
+;;;
+;;; Spend cases:
+;;;   1 — PROPOSE: create a new proposal (DID-gated)
+;;;   2 — EXECUTE_SETTLEMENT: approve batch settlement (splitxch distribution)
+;;;   3 — EXECUTE_FREEZE: freeze or unfreeze the pool
+;;;   4 — EXECUTE_MINT: approve a new deed mint (quorum-gated, message to DID)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(mod
+    (
+        MOD_HASH
+        SINGLETON_STRUCT
+        PROTOCOL_DID_PUZHASH
+        QUORUM_BPS
+        PROPOSAL_HASH
+        ;; --- solution ---
+        my_id
+        my_inner_puzzlehash
+        my_amount
+        spend_case
+        params
+    )
+
+    (include condition_codes.clib)
+    (include utils.clib)
+    (include utility_macros.clib)
+
+    ;; Spend case constants
+    (defconstant GOV_SPEND_PROPOSE 1)
+    (defconstant GOV_SPEND_EXECUTE_SETTLEMENT 2)
+    (defconstant GOV_SPEND_EXECUTE_FREEZE 3)
+    (defconstant GOV_SPEND_EXECUTE_MINT 4)
+
+    ;; Compute inner puzzle hash from curried params + state
+    (defun compute_inner_ph (MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH
+                              QUORUM_BPS proposal_hash)
+        (curry_hashes MOD_HASH
+            (sha256 1 MOD_HASH)
+            (sha256tree SINGLETON_STRUCT)
+            (sha256 1 PROTOCOL_DID_PUZHASH)
+            (sha256 1 QUORUM_BPS)
+            (sha256 1 proposal_hash))
+    )
+
+    ;; Identity conditions — every spend asserts self
+    (defun identity_conditions (SINGLETON_STRUCT my_id my_inner_puzzlehash my_amount)
+        (list
+            (list ASSERT_MY_COIN_ID my_id)
+            (list ASSERT_MY_AMOUNT my_amount)
+            (list ASSERT_MY_PUZZLEHASH (calculate_full_puzzle_hash SINGLETON_STRUCT my_inner_puzzlehash))
+        )
+    )
+
+    ;; SPEND CASE 1 — PROPOSE
+    ;; params = (proposal_hash did_inner_puzhash)
+    ;; DID must co-spend and announce the proposal hash
+    (defun spend_propose (MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                          my_id my_inner_puzzlehash my_amount
+                          proposal_hash did_inner_puzhash)
+        (assert
+            (is-size-b32 proposal_hash)
+            (is-size-b32 did_inner_puzhash)
+            (c
+                (list CREATE_COIN
+                    (compute_inner_ph MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS proposal_hash)
+                    my_amount)
+                (c
+                    (list ASSERT_PUZZLE_ANNOUNCEMENT
+                        (sha256 PROTOCOL_DID_PUZHASH (concat PROTOCOL_PREFIX (sha256tree (list 0x50524f50 proposal_hash)))))
+                    (c
+                        (list CREATE_PUZZLE_ANNOUNCEMENT
+                            (concat PROTOCOL_PREFIX (sha256tree (list GOV_SPEND_PROPOSE proposal_hash))))
+                        (c
+                            (list REMARK PROTOCOL_PREFIX GOV_SPEND_PROPOSE proposal_hash)
+                            (identity_conditions SINGLETON_STRUCT my_id my_inner_puzzlehash my_amount)
+                        )
+                    )
+                )
+            )
+        )
+    )
+
+    ;; SPEND CASE 2 — EXECUTE_SETTLEMENT (batch)
+    ;; params = (splitxch_root_hash total_settlement_amount num_deeds vote_weight)
+    ;; Approves batch settlement for entire collection.  Sends one CHIP-25
+    ;; message to pool.  Pool verifies num_deeds matches its DEED_COUNT.
+    ;; The splitxch_root_hash is the root of the equal-split distribution tree
+    ;; (analogous to Solslot secure_the_bag).  External deposit funds the tree.
+    (defun spend_execute_settlement (MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                                     my_id my_inner_puzzlehash my_amount
+                                     splitxch_root_hash total_settlement_amount num_deeds vote_weight)
+        (assert
+            (gte vote_weight QUORUM_BPS)
+            (is-size-b32 splitxch_root_hash)
+            (is-uint64 total_settlement_amount)
+            (is-uint64 num_deeds)
+            (is-uint64 vote_weight)
+            (> num_deeds 0)
+            (> total_settlement_amount 0)
+            (c
+                (list CREATE_COIN
+                    (compute_inner_ph MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS 0)
+                    my_amount)
+                (c
+                    (list SEND_MESSAGE 0x10
+                        (concat PROTOCOL_PREFIX (sha256tree (list 0x53455454 splitxch_root_hash total_settlement_amount num_deeds))))
+                    (c
+                        (list REMARK PROTOCOL_PREFIX GOV_SPEND_EXECUTE_SETTLEMENT splitxch_root_hash total_settlement_amount num_deeds)
+                        (identity_conditions SINGLETON_STRUCT my_id my_inner_puzzlehash my_amount)
+                    )
+                )
+            )
+        )
+    )
+
+    ;; SPEND CASE 3 — EXECUTE_FREEZE
+    ;; params = (new_pool_status vote_weight)
+    ;; Announces freeze/unfreeze for pool to consume
+    (defun spend_execute_freeze (MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                                 my_id my_inner_puzzlehash my_amount
+                                 new_pool_status vote_weight)
+        (assert
+            (gte vote_weight QUORUM_BPS)
+            (is-uint64 vote_weight)
+            (c
+                (list CREATE_COIN
+                    (compute_inner_ph MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS 0)
+                    my_amount)
+                (c
+                    (list SEND_MESSAGE 0x10
+                        (concat PROTOCOL_PREFIX (sha256tree (list 0x474f5620 new_pool_status))))
+                    (c
+                        (list REMARK PROTOCOL_PREFIX GOV_SPEND_EXECUTE_FREEZE new_pool_status)
+                        (identity_conditions SINGLETON_STRUCT my_id my_inner_puzzlehash my_amount)
+                    )
+                )
+            )
+        )
+    )
+
+    ;; SPEND CASE 4 — EXECUTE_MINT
+    ;; params = (singleton_full_puzzle_hash vote_weight)
+    ;; Sends CHIP-25 message to DID authorizing a deed mint
+    (defun spend_execute_mint (MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                               my_id my_inner_puzzlehash my_amount
+                               singleton_full_puzzle_hash vote_weight)
+        (assert
+            (gte vote_weight QUORUM_BPS)
+            (is-size-b32 singleton_full_puzzle_hash)
+            (is-uint64 vote_weight)
+            (c
+                (list CREATE_COIN
+                    (compute_inner_ph MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS 0)
+                    my_amount)
+                (c
+                    (list SEND_MESSAGE 0x10
+                        (concat PROTOCOL_PREFIX (sha256tree (list 0x4d494e54 singleton_full_puzzle_hash))))
+                    (c
+                        (list REMARK PROTOCOL_PREFIX GOV_SPEND_EXECUTE_MINT singleton_full_puzzle_hash)
+                        (identity_conditions SINGLETON_STRUCT my_id my_inner_puzzlehash my_amount)
+                    )
+                )
+            )
+        )
+    )
+
+    ;; Main dispatch — validate common inputs, then route
+    (assert
+        (is-size-b32 my_id)
+        (is-size-b32 my_inner_puzzlehash)
+        (is-uint64 my_amount)
+        (if (= spend_case GOV_SPEND_PROPOSE)
+            (spend_propose MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                           my_id my_inner_puzzlehash my_amount
+                           (f params) (f (r params)))
+            (if (= spend_case GOV_SPEND_EXECUTE_SETTLEMENT)
+                (spend_execute_settlement MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                                         my_id my_inner_puzzlehash my_amount
+                                         (f params) (f (r params)) (f (r (r params))) (f (r (r (r params)))))
+                (if (= spend_case GOV_SPEND_EXECUTE_FREEZE)
+                    (spend_execute_freeze MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                                         my_id my_inner_puzzlehash my_amount
+                                         (f params) (f (r params)))
+                    (if (= spend_case GOV_SPEND_EXECUTE_MINT)
+                        (spend_execute_mint MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH QUORUM_BPS
+                                           my_id my_inner_puzzlehash my_amount
+                                           (f params) (f (r params)))
+                        (x) ;; invalid spend case
+                    )
+                )
+            )
+        )
+    )
+)

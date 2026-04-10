@@ -1,0 +1,55 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Ephemeral payment coin for purchasing a minted deed at par value.
+;;;
+;;; This puzzle is meant to be created and spent in the same block by the
+;;; buyer.  It enforces that exactly PAR_VALUE mojos are sent to
+;;; PROTOCOL_PUZHASH and sends a CHIP-25 SEND_MESSAGE so the deed's
+;;; mint_offer_delegate can verify payment via RECEIVE_MESSAGE.
+;;;
+;;; Curried parameters:
+;;;   PAR_VALUE         — price in mojos the buyer must pay
+;;;   PROTOCOL_PUZHASH  — puzzle hash that receives the payment
+;;;
+;;; Solution parameters:
+;;;   buyer_puzhash — where change goes
+;;;   my_amount     — amount of this coin (must be >= PAR_VALUE)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(mod (PAR_VALUE PROTOCOL_PUZHASH
+      ;; --- solution ---
+      buyer_puzhash my_amount)
+
+    (include condition_codes.clib)
+    (include utils.clib)
+    (include utility_macros.clib)
+
+    (defconstant PURCHASE_MSG_PREFIX 0x50555243) ; ASCII "PURC"
+
+    (defun base_conditions (PAR_VALUE PROTOCOL_PUZHASH my_amount)
+        (list
+            (list CREATE_COIN PROTOCOL_PUZHASH PAR_VALUE (list PROTOCOL_PUZHASH))
+            (list SEND_MESSAGE 0x10
+                (concat PROTOCOL_PREFIX (sha256tree (list PURCHASE_MSG_PREFIX PAR_VALUE PROTOCOL_PUZHASH))))
+            (list ASSERT_MY_AMOUNT my_amount)
+        )
+    )
+
+    (defun conditions_with_change (PAR_VALUE PROTOCOL_PUZHASH buyer_puzhash my_amount)
+        (c
+            (list CREATE_COIN buyer_puzhash (- my_amount PAR_VALUE) (list buyer_puzhash))
+            (base_conditions PAR_VALUE PROTOCOL_PUZHASH my_amount)
+        )
+    )
+
+    (assert
+        (is-size-b32 buyer_puzhash)
+        (is-uint64 my_amount)
+        (is-uint64 PAR_VALUE)
+        (> PAR_VALUE 0)
+        (gte my_amount PAR_VALUE)
+        (if (> my_amount PAR_VALUE)
+            (conditions_with_change PAR_VALUE PROTOCOL_PUZHASH buyer_puzhash my_amount)
+            (base_conditions PAR_VALUE PROTOCOL_PUZHASH my_amount)
+        )
+    )
+)

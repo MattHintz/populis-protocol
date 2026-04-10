@@ -1,0 +1,161 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Per-user vault singleton for Populis Protocol.
+;; Forked from Solslot vault_singleton_inner.clsp, adapted for pool interactions.
+;;
+;; Spend cases:
+;; 'o' - deposit to pool: vault releases deed, pool accepts
+;; 'i' - receive from pool: pool releases deed, vault accepts
+;; 'a' - accept pool offer: secondary purchase via atomic swap
+;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(mod
+  (SINGLETON_STRUCT
+   OWNER_PUBKEY
+   POOL_SINGLETON_MOD_HASH
+   POOL_SINGLETON_LAUNCHER_ID
+   POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+   my_id
+   my_inner_puzzlehash
+   my_amount
+   spend_case
+   p
+  )
+
+  (include "condition_codes.clib")
+  (include "utils.clib")
+  (include "utility_macros.clib")
+
+  (defconst SPEND_DEPOSIT_TO_POOL 'o')
+  (defconst SPEND_RECEIVE_FROM_POOL 'i')
+  (defconst SPEND_ACCEPT_OFFER 'a')
+
+  ;; Pool spend case constants for announcement matching
+  (defconst POOL_SPEND_DEPOSIT 1)
+  (defconst POOL_SPEND_REDEEM 2)
+  (defconst POOL_SPEND_GENERATE_OFFER 5)
+
+  (defun base_conditions (SINGLETON_STRUCT my_id my_amount my_inner_puzzlehash)
+    (list
+      (list ASSERT_MY_COIN_ID my_id)
+      (list ASSERT_MY_AMOUNT my_amount)
+      (list ASSERT_MY_PUZZLEHASH (calculate_full_puzzle_hash SINGLETON_STRUCT my_inner_puzzlehash))
+    )
+  )
+
+  (defun pool_full_puzzle_hash (POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH pool_inner_puzhash)
+    (calculate_full_puzzle_hash
+      (c POOL_SINGLETON_MOD_HASH (c POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH))
+      pool_inner_puzhash
+    )
+  )
+
+  ;; SPEND CASE 'o' — DEPOSIT TO POOL
+  ;; p = (deed_launcher_id pool_inner_puzhash)
+  (defun spend_deposit_to_pool (SINGLETON_STRUCT OWNER_PUBKEY POOL_SINGLETON_MOD_HASH
+                                POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+                                my_id my_inner_puzzlehash my_amount
+                                deed_launcher_id pool_inner_puzhash)
+    (assert
+      (is-size-b32 deed_launcher_id)
+      (is-size-b32 pool_inner_puzhash)
+      (c
+        (list AGG_SIG_ME OWNER_PUBKEY (sha256tree (list SPEND_DEPOSIT_TO_POOL deed_launcher_id)))
+        (c
+          (list CREATE_PUZZLE_ANNOUNCEMENT
+            (concat PROTOCOL_PREFIX (sha256tree (list SPEND_DEPOSIT_TO_POOL deed_launcher_id))))
+          (c
+            (list CREATE_COIN my_inner_puzzlehash my_amount (list my_inner_puzzlehash))
+            (c
+              (list REMARK PROTOCOL_PREFIX SPEND_DEPOSIT_TO_POOL deed_launcher_id)
+              (base_conditions SINGLETON_STRUCT my_id my_amount my_inner_puzzlehash)
+            )
+          )
+        )
+      )
+    )
+  )
+
+  ;; SPEND CASE 'i' — RECEIVE FROM POOL
+  ;; p = (deed_launcher_id pool_inner_puzhash)
+  (defun spend_receive_from_pool (SINGLETON_STRUCT OWNER_PUBKEY POOL_SINGLETON_MOD_HASH
+                                  POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+                                  my_id my_inner_puzzlehash my_amount
+                                  deed_launcher_id pool_inner_puzhash)
+    (assert
+      (is-size-b32 deed_launcher_id)
+      (is-size-b32 pool_inner_puzhash)
+      (c
+        (list AGG_SIG_ME OWNER_PUBKEY (sha256tree (list SPEND_RECEIVE_FROM_POOL deed_launcher_id)))
+        (c
+          (list ASSERT_PUZZLE_ANNOUNCEMENT
+            (sha256
+              (pool_full_puzzle_hash POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH pool_inner_puzhash)
+              (concat PROTOCOL_PREFIX (sha256tree (list POOL_SPEND_REDEEM deed_launcher_id my_id)))))
+          (c
+            (list CREATE_COIN my_inner_puzzlehash my_amount (list my_inner_puzzlehash))
+            (c
+              (list REMARK PROTOCOL_PREFIX SPEND_RECEIVE_FROM_POOL deed_launcher_id)
+              (base_conditions SINGLETON_STRUCT my_id my_amount my_inner_puzzlehash)
+            )
+          )
+        )
+      )
+    )
+  )
+
+  ;; SPEND CASE 'a' — ACCEPT POOL OFFER (secondary purchase)
+  ;; p = (deed_launcher_id token_amount pool_inner_puzhash)
+  (defun spend_accept_offer (SINGLETON_STRUCT OWNER_PUBKEY POOL_SINGLETON_MOD_HASH
+                             POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+                             my_id my_inner_puzzlehash my_amount
+                             deed_launcher_id token_amount pool_inner_puzhash)
+    (assert
+      (is-size-b32 deed_launcher_id)
+      (is-uint64 token_amount)
+      (is-size-b32 pool_inner_puzhash)
+      (c
+        (list AGG_SIG_ME OWNER_PUBKEY (sha256tree (list SPEND_ACCEPT_OFFER deed_launcher_id token_amount)))
+        (c
+          (list ASSERT_PUZZLE_ANNOUNCEMENT
+            (sha256
+              (pool_full_puzzle_hash POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH pool_inner_puzhash)
+              (concat PROTOCOL_PREFIX (sha256tree (list POOL_SPEND_GENERATE_OFFER deed_launcher_id token_amount)))))
+          (c
+            (list CREATE_COIN my_inner_puzzlehash my_amount (list my_inner_puzzlehash))
+            (c
+              (list REMARK PROTOCOL_PREFIX SPEND_ACCEPT_OFFER deed_launcher_id token_amount)
+              (base_conditions SINGLETON_STRUCT my_id my_amount my_inner_puzzlehash)
+            )
+          )
+        )
+      )
+    )
+  )
+
+  ;; Main dispatch — validate common inputs, then route
+  (assert
+    (is-size-b32 my_id)
+    (is-size-b32 my_inner_puzzlehash)
+    (is-uint64 my_amount)
+    (if (= spend_case SPEND_DEPOSIT_TO_POOL)
+      (spend_deposit_to_pool SINGLETON_STRUCT OWNER_PUBKEY POOL_SINGLETON_MOD_HASH
+                             POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+                             my_id my_inner_puzzlehash my_amount
+                             (f p) (f (r p)))
+      (if (= spend_case SPEND_RECEIVE_FROM_POOL)
+        (spend_receive_from_pool SINGLETON_STRUCT OWNER_PUBKEY POOL_SINGLETON_MOD_HASH
+                                 POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+                                 my_id my_inner_puzzlehash my_amount
+                                 (f p) (f (r p)))
+        (if (= spend_case SPEND_ACCEPT_OFFER)
+          (spend_accept_offer SINGLETON_STRUCT OWNER_PUBKEY POOL_SINGLETON_MOD_HASH
+                              POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+                              my_id my_inner_puzzlehash my_amount
+                              (f p) (f (r p)) (f (r (r p))))
+          (x) ;; unknown spend case
+        )
+      )
+    )
+  )
+)

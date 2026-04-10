@@ -1,0 +1,31 @@
+(
+  ;; Asset class constants
+  (defconstant CLASS_PROPERTY 1)
+  (defconstant CLASS_FSI 2)
+  (defconstant CLASS_ALTERNATIVE 3)
+
+  ;; Smart Deed spend cases (gated — pool only, no free transfer)
+  (defconstant DEED_SPEND_POOL_DEPOSIT 0x64)
+  (defconstant DEED_SPEND_POOL_REDEEM 0x72)
+  (defconstant DEED_SPEND_SETTLEMENT 0x73)
+
+  ;; Vault spend cases
+  (defconstant VAULT_SPEND_DEPOSIT_TO_POOL 0x6f)
+  (defconstant VAULT_SPEND_RECEIVE_FROM_POOL 0x69)
+  (defconstant VAULT_SPEND_ACCEPT_OFFER 0x61)
+
+  ;; Pool spend cases
+  (defconstant POOL_SPEND_DEPOSIT 1)
+  (defconstant POOL_SPEND_REDEEM 2)
+  (defconstant POOL_SPEND_SETTLEMENT 3)
+  (defconstant POOL_SPEND_GOVERNANCE 4)
+  (defconstant POOL_SPEND_GENERATE_OFFER 5)
+
+  ;; Pool status
+  (defconstant POOL_ACTIVE 1)
+  (defconstant POOL_FROZEN 0)
+
+  ;; Fee basis — all fees are in basis points (100 = 1%)
+  ;; Fixed-point mint rate: 1000 = 1.000 tokens per dollar of par
+  (defconstant FP_SCALE 1000)
+)
