@@ -189,13 +189,20 @@ Puzzle integrity is verified on import via SHA256 checksum of all compiled `.cls
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Proprietary — All Rights Reserved.
+
+Copyright (c) 2025-2026 Matthew S. Hintz. See [LICENSE](LICENSE) for the full
+terms. No rights are granted to copy, modify, distribute, deploy, or
+commercially use this Software without prior written permission from the
+Author.
 
 ---
 
 ## Contributing
 
-This is an early sketch. Issues, discussions, and PRs are welcome. The best way to contribute right now is to read the contracts, run the tests, and tell us what's wrong.
+This repository is published for visibility only. Unsolicited pull requests
+cannot be accepted under the current license terms. If you are interested in
+collaborating or licensing the Software, please contact the Author.
 
 ```bash
 # Run the full suite
