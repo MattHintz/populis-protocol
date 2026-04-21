@@ -6,14 +6,28 @@ Tests run the curried puzzle directly via Program.run() to verify:
   3. Invalid spend case raises (no free transfer)
   4. Input validation rejects bad inputs
 """
+import hashlib
+
 import pytest
 from chia.types.blockchain_format.program import Program
 from chia.wallet.puzzles.load_clvm import load_clvm
+from chia.wallet.util.curry_and_treehash import (
+    calculate_hash_of_quoted_mod_hash,
+    curry_and_treehash,
+)
 from chia_rs.sized_bytes import bytes32
 
 # Load the compiled smart deed inner puzzle
 SMART_DEED_INNER_MOD: Program = load_clvm(
     "smart_deed_inner.clsp",
+    package_or_requirement="populis_puzzles",
+    recompile=True,
+)
+
+# p2_pool must be loaded so the test can compute the *exact* bare p2_pool inner
+# puzhash the deposit path should target.
+P2_POOL_MOD: Program = load_clvm(
+    "p2_pool.clsp",
     package_or_requirement="populis_puzzles",
     recompile=True,
 )
@@ -30,6 +44,7 @@ JURISDICTION = b"US-CA"
 ROYALTY_PUZHASH = bytes32(b"\x04" * 32)
 ROYALTY_BPS = 200
 POOL_SINGLETON_MOD_HASH = SINGLETON_MOD_HASH  # same mod hash, different launcher
+P2_POOL_MOD_HASH = P2_POOL_MOD.get_tree_hash()
 P2_VAULT_MOD_HASH = bytes32(b"\x07" * 32)
 
 # Spend case constants (must match smart_deed_inner.clsp)
@@ -53,7 +68,25 @@ def curry_deed() -> Program:
         ROYALTY_PUZHASH,
         ROYALTY_BPS,
         POOL_SINGLETON_MOD_HASH,
+        P2_POOL_MOD_HASH,
         P2_VAULT_MOD_HASH,
+    )
+
+
+def _computed_bare_p2_pool_ph(pool_launcher_id: bytes32) -> bytes32:
+    """Recompute the p2_pool *inner* puzhash the way the deed does internally.
+
+    This is the pre-morph target; singleton_top_layer will wrap it into
+    singleton.curry(deed_struct, p2_pool_inner) when the deed coin is spent.
+    """
+    quoted_mod = calculate_hash_of_quoted_mod_hash(P2_POOL_MOD_HASH)
+    return bytes32(
+        curry_and_treehash(
+            quoted_mod,
+            hashlib.sha256(b"\x01" + bytes(POOL_SINGLETON_MOD_HASH)).digest(),
+            hashlib.sha256(b"\x01" + bytes(pool_launcher_id)).digest(),
+            hashlib.sha256(b"\x01" + bytes(LAUNCHER_PUZZLE_HASH)).digest(),
+        )
     )
 
 
@@ -123,6 +156,55 @@ class TestSmartDeedDeposit:
         assert conditions[4][0] == bytes([73])
         # Verify ASSERT_MY_PUZZLEHASH (P0 enhancement)
         assert conditions[5][0] == bytes([72])
+
+    def test_deposit_destination_is_computed_bare_p2_pool(self):
+        """Regression for CRIT-1: deposit CREATE_COIN must target the *bare*
+        p2_pool inner puzhash so singleton_top_layer's morph wraps it into
+        singleton.curry(deed_struct, p2_pool_inner). Before the fix the target
+        was the pool singleton's FULL puzhash, which is meaningless as an
+        inner puzzle and caused deposited deeds to be burnt.
+        """
+        curried = curry_deed()
+        my_id = bytes32(b"\xdd" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        my_amount = 1
+
+        pool_launcher_id = bytes32(b"\xbb" * 32)
+        pool_inner_puzhash = bytes32(b"\xcc" * 32)
+
+        sol = make_solution(
+            my_id, my_inner_puzhash, my_amount,
+            DEED_SPEND_POOL_DEPOSIT,
+            [pool_launcher_id, pool_inner_puzhash, LAUNCHER_PUZZLE_HASH],
+        )
+        conditions = curried.run(sol).as_python()
+        create_coin = [c for c in conditions if c[0] == bytes([51])][0]
+        deed_dest = bytes32(create_coin[1])
+
+        expected = _computed_bare_p2_pool_ph(pool_launcher_id)
+        assert deed_dest == expected, (
+            f"Deposit destination mismatch \u2014 deed burn bug regressed!\n"
+            f"  Deed sends to:       {deed_dest.hex()}\n"
+            f"  Expected bare p2_pool: {expected.hex()}"
+        )
+
+        # Defensive: explicitly reject the old (buggy) target shape where the
+        # deed was sent to the pool singleton's full puzhash.
+        quoted_singleton = calculate_hash_of_quoted_mod_hash(SINGLETON_MOD_HASH)
+        pool_struct = Program.to(
+            (POOL_SINGLETON_MOD_HASH, (pool_launcher_id, LAUNCHER_PUZZLE_HASH))
+        )
+        buggy_pool_full_ph = bytes32(
+            curry_and_treehash(
+                quoted_singleton,
+                pool_struct.get_tree_hash(),
+                pool_inner_puzhash,
+            )
+        )
+        assert deed_dest != buggy_pool_full_ph, (
+            "Deposit destination regressed to the pre-fix buggy value "
+            "(pool singleton's full puzhash)"
+        )
 
 
 class TestSmartDeedRedeem:

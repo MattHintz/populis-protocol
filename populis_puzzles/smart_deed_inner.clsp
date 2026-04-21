@@ -9,6 +9,7 @@
     ROYALTY_PUZHASH
     ROYALTY_BPS
     POOL_SINGLETON_MOD_HASH
+    P2_POOL_MOD_HASH
     P2_VAULT_MOD_HASH
     ;; --- solution ---
     my_id
@@ -41,8 +42,14 @@
   )
 
   ;; SPEND CASE 'd' — POOL DEPOSIT (vault -> pool)
+  ;; Deed transitions its inner puzzle to p2_pool (still a singleton).
+  ;; The CREATE_COIN target is the BARE p2_pool inner puzhash; singleton_top_layer
+  ;; auto-morphs this into the deed's new full puzhash:
+  ;;   singleton.curry(deed_struct, p2_pool_inner_hash)
+  ;; This enforces pool-level containment: deposited deeds never leak to arbitrary
+  ;; addresses, mirroring the spend_pool_redeem containment pattern via p2_vault.
   ;; params = (pool_launcher_id pool_inner_puzhash launcher_puzzle_hash)
-  (defun spend_pool_deposit (SINGLETON_STRUCT POOL_SINGLETON_MOD_HASH PAR_VALUE ASSET_CLASS
+  (defun spend_pool_deposit (SINGLETON_STRUCT POOL_SINGLETON_MOD_HASH P2_POOL_MOD_HASH PAR_VALUE ASSET_CLASS
                              my_id my_amount my_inner_puzzlehash
                              pool_launcher_id pool_inner_puzhash launcher_puzzle_hash)
     (assert
@@ -50,10 +57,13 @@
       (is-size-b32 pool_inner_puzhash)
       (is-size-b32 launcher_puzzle_hash)
       (c
+        ;; Destination is the computed p2_pool inner puzhash (pre-morph).
+        ;; p2_pool = curry(P2_POOL_MOD_HASH, POOL_SINGLETON_MOD_HASH, pool_launcher_id, launcher_puzzle_hash)
         (list CREATE_COIN
-          (curry_hashes POOL_SINGLETON_MOD_HASH
-            (sha256tree (c POOL_SINGLETON_MOD_HASH (c pool_launcher_id launcher_puzzle_hash)))
-            pool_inner_puzhash)
+          (curry_hashes P2_POOL_MOD_HASH
+            (sha256 1 POOL_SINGLETON_MOD_HASH)
+            (sha256 1 pool_launcher_id)
+            (sha256 1 launcher_puzzle_hash))
           my_amount)
         (c
           (list CREATE_COIN_ANNOUNCEMENT
@@ -126,7 +136,7 @@
     (is-size-b32 my_inner_puzzlehash)
     (is-uint64 my_amount)
     (if (= spend_case DEED_SPEND_POOL_DEPOSIT)
-      (spend_pool_deposit SINGLETON_STRUCT POOL_SINGLETON_MOD_HASH PAR_VALUE ASSET_CLASS
+      (spend_pool_deposit SINGLETON_STRUCT POOL_SINGLETON_MOD_HASH P2_POOL_MOD_HASH PAR_VALUE ASSET_CLASS
                           my_id my_amount my_inner_puzzlehash
                           (f params) (f (r params)) (f (r (r params))))
       (if (= spend_case DEED_SPEND_POOL_REDEEM)

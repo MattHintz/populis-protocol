@@ -43,6 +43,11 @@ POOL_TOKEN_TAIL_MOD: Program = load_clvm(
     package_or_requirement="populis_puzzles",
     recompile=True,
 )
+P2_POOL_MOD: Program = load_clvm(
+    "p2_pool.clsp",
+    package_or_requirement="populis_puzzles",
+    recompile=True,
+)
 
 # ── Shared protocol constants ──
 SINGLETON_MOD_HASH = bytes32(b"\x01" * 32)
@@ -51,6 +56,7 @@ PROTOCOL_DID_PUZHASH = bytes32(b"\x03" * 32)
 TOKEN_TAIL_HASH = bytes32(b"\x04" * 32)
 CAT_MOD_HASH = bytes32(b"\x05" * 32)
 OFFER_MOD_HASH = bytes32(b"\x06" * 32)
+P2_POOL_MOD_HASH = P2_POOL_MOD.get_tree_hash()
 P2_VAULT_MOD_HASH = bytes32(b"\x07" * 32)
 PROTOCOL_PREFIX = b"\x50"
 
@@ -111,6 +117,7 @@ def curry_deed() -> Program:
         ROYALTY_PUZHASH,
         ROYALTY_BPS,
         SINGLETON_MOD_HASH,  # POOL_SINGLETON_MOD_HASH = same mod
+        P2_POOL_MOD_HASH,
         P2_VAULT_MOD_HASH,
     )
 

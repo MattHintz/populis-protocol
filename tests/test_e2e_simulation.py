@@ -98,6 +98,11 @@ P2_VAULT_MOD: Program = load_clvm(
     package_or_requirement="populis_puzzles",
     recompile=True,
 )
+P2_POOL_MOD: Program = load_clvm(
+    "p2_pool.clsp",
+    package_or_requirement="populis_puzzles",
+    recompile=True,
+)
 
 # ─────────────────────────────────────────────────────────────────────
 # Protocol constants — use REAL singleton mod hash from chia-blockchain
@@ -127,6 +132,7 @@ TOKEN_MELT = -1
 POOL_MOD_HASH = POOL_INNER_MOD.get_tree_hash()
 GOV_MOD_HASH = GOV_INNER_MOD.get_tree_hash()
 P2_VAULT_MOD_HASH = P2_VAULT_MOD.get_tree_hash()
+P2_POOL_MOD_HASH = P2_POOL_MOD.get_tree_hash()
 PURCHASE_MOD_HASH = PURCHASE_PAYMENT_MOD.get_tree_hash()
 
 # Placeholder hashes for contracts not directly exercised in deposit/redeem path
@@ -229,6 +235,7 @@ def curry_deed() -> Program:
         ROYALTY_PUZHASH,
         ROYALTY_BPS,
         SINGLETON_MOD_HASH,
+        P2_POOL_MOD_HASH,
         P2_VAULT_MOD_HASH,
     )
 
@@ -549,7 +556,16 @@ class TestPhase5Deposit:
         assert bytes32(tail_assert[1]) == computed_hash, "Pool↔Token announcement mismatch"
 
     def test_deed_sends_to_p2_pool(self):
-        """Deed CREATE_COIN destination is the correct p2_pool escrow puzzle hash."""
+        """Regression for CRIT-1: Deed CREATE_COIN destination must be the
+        *bare* p2_pool inner puzhash.
+
+        singleton_top_layer's check_and_morph_conditions_for_singleton then
+        wraps this odd-amount CREATE_COIN into the deed's new full puzhash
+        singleton.curry(deed_struct, p2_pool_inner_hash). Before the fix the
+        deed was sent to the pool singleton's full puzhash, which is nonsense
+        as an inner puzzle and caused deposited deeds to be permanently
+        unspendable.
+        """
         deed_sol = Program.to([
             DEED_COIN_ID, self.deed_inner_ph, 1,
             DEED_SPEND_POOL_DEPOSIT,
@@ -557,13 +573,38 @@ class TestPhase5Deposit:
         ])
         deed_conds = self.deed_inner.run(deed_sol).as_python()
         create = extract_cond(deed_conds, 51)
-        deed_dest = create[1]
+        deed_dest = bytes32(create[1])
 
-        # The deed computes p2_pool via:
-        # curry_hashes(POOL_SINGLETON_MOD_HASH, sha256tree(struct), pool_inner_puzhash)
-        # where struct = (POOL_SINGLETON_MOD_HASH, (pool_launcher_id, launcher_puzzle_hash))
-        # This matches the singleton top layer's curry hash
-        assert len(deed_dest) == 32, "Deed destination must be 32 bytes (puzzle hash)"
+        # Expected: bare p2_pool inner puzhash (pre-morph target).
+        quoted_mod = calculate_hash_of_quoted_mod_hash(P2_POOL_MOD_HASH)
+        expected_bare_p2_pool = bytes32(curry_and_treehash(
+            quoted_mod,
+            hashlib.sha256(b"\x01" + bytes(SINGLETON_MOD_HASH)).digest(),
+            hashlib.sha256(b"\x01" + bytes(POOL_LAUNCHER_ID)).digest(),
+            hashlib.sha256(b"\x01" + bytes(LAUNCHER_PUZZLE_HASH)).digest(),
+        ))
+        assert deed_dest == expected_bare_p2_pool, (
+            f"Deposit destination mismatch (deed burn bug regressed!):\n"
+            f"  Deed sends to:       {deed_dest.hex()}\n"
+            f"  Expected bare p2_pool: {expected_bare_p2_pool.hex()}"
+        )
+
+        # Belt-and-braces: explicitly reject the pre-fix buggy value
+        # (pool singleton's full puzhash) so a future refactor cannot
+        # silently regress.
+        quoted_singleton = calculate_hash_of_quoted_mod_hash(SINGLETON_MOD_HASH)
+        pool_struct = Program.to(
+            (SINGLETON_MOD_HASH, (POOL_LAUNCHER_ID, LAUNCHER_PUZZLE_HASH))
+        )
+        buggy_pool_full_ph = bytes32(curry_and_treehash(
+            quoted_singleton,
+            pool_struct.get_tree_hash(),
+            self.pool_inner_ph,
+        ))
+        assert deed_dest != buggy_pool_full_ph, (
+            "Deposit destination regressed to the pre-fix buggy value "
+            "(pool singleton's full puzhash). Deeds sent there are burnt."
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1419,3 +1460,338 @@ class TestFullLifecycleRoundTrip:
         assert len(announcements) == 3, (
             f"Expected 3 announcements (1 batch + 2 releases), got {len(announcements)}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase 10: Vault co-spend integration
+# Verifies vault ↔ pool announcement pairing for deposit ('o') and
+# receive ('i') cases, and that auth-type isolation holds at condition level.
+# ─────────────────────────────────────────────────────────────────────
+
+VAULT_INNER_MOD: Program = load_clvm(
+    "vault_singleton_inner.clsp",
+    package_or_requirement="populis_puzzles",
+    recompile=True,
+)
+
+# Vault identity constants
+VAULT_OWNER_PUBKEY_BLS = bytes(48)                   # 48-byte BLS G1 placeholder
+VAULT_OWNER_PUBKEY_SECP = b"\x02" + bytes(32)        # 33-byte secp256k1 placeholder
+VAULT_COIN_ID = bytes32(b"\xb4" * 32)
+
+AUTH_TYPE_BLS = 1
+AUTH_TYPE_SECP256K1 = 3
+
+# Plausible Unix timestamp for Phase 10 tests (2025-01-01T00:00:00Z)
+VAULT_CURRENT_TIMESTAMP = 1_735_689_600
+
+# Members Merkle root placeholder — one-leaf tree for single-owner vaults
+VAULT_MEMBERS_MERKLE_ROOT_E2E = bytes32(b"\xee" * 32)
+
+VAULT_SINGLETON_STRUCT_E2E = Program.to(
+    (SINGLETON_MOD_HASH, (VAULT_LAUNCHER_ID, SINGLETON_LAUNCHER_HASH))
+)
+
+
+def curry_vault_bls_e2e() -> Program:
+    return VAULT_INNER_MOD.curry(
+        VAULT_SINGLETON_STRUCT_E2E,
+        VAULT_OWNER_PUBKEY_BLS,
+        AUTH_TYPE_BLS,
+        VAULT_MEMBERS_MERKLE_ROOT_E2E,
+        SINGLETON_MOD_HASH,
+        POOL_LAUNCHER_ID,
+        SINGLETON_LAUNCHER_HASH,
+    )
+
+
+def curry_vault_secp_e2e() -> Program:
+    return VAULT_INNER_MOD.curry(
+        VAULT_SINGLETON_STRUCT_E2E,
+        VAULT_OWNER_PUBKEY_SECP,
+        AUTH_TYPE_SECP256K1,
+        VAULT_MEMBERS_MERKLE_ROOT_E2E,
+        SINGLETON_MOD_HASH,
+        POOL_LAUNCHER_ID,
+        SINGLETON_LAUNCHER_HASH,
+    )
+
+
+class TestPhase10VaultCoSpend:
+    """Phase 10: Vault ↔ pool co-spend announcement pairing.
+
+    Exercises the three vault spend cases (deposit 'o', receive 'i', accept 'a')
+    at the condition level and verifies:
+      1. Vault CREATE_PUZZLE_ANNOUNCEMENT content matches the expected pool
+         ASSERT_PUZZLE_ANNOUNCEMENT hash (deposit)
+      2. Vault ASSERT_PUZZLE_ANNOUNCEMENT hash matches the pool's
+         CREATE_PUZZLE_ANNOUNCEMENT content (receive)
+      3. BLS AGG_SIG_ME is present and bound to the owner pubkey and spend case
+      4. secp256k1 vault produces a different puzzle hash (auth isolation)
+      5. Vault always recreates itself as a singleton coin
+    """
+
+    def setup_method(self):
+        self.vault_bls = curry_vault_bls_e2e()
+        self.vault_inner_puzhash = self.vault_bls.get_tree_hash()
+        self.pool_inner = curry_pool(pool_status=POOL_ACTIVE, tvl=0, deed_count=0)
+        self.pool_inner_ph = self.pool_inner.get_tree_hash()
+
+    # ── Helper ────────────────────────────────────────────────────────────
+
+    def _pool_full_puzzle_hash(self) -> bytes32:
+        """Compute the pool singleton full puzzle hash."""
+        return full_puzzle_hash(POOL_SINGLETON_STRUCT, self.pool_inner)
+
+    # ── Deposit ('o') ─────────────────────────────────────────────────────
+
+    def test_vault_deposit_creates_pool_announcement(self):
+        """Vault deposit emits CREATE_PUZZLE_ANNOUNCEMENT with PROTOCOL_PREFIX."""
+        sol = Program.to([
+            VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+            0x6f,  # 'o'
+            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+        ])
+        conds = self.vault_bls.run(sol).as_python()
+
+        anns = [c for c in conds if c[0] == bytes([62])]
+        assert len(anns) == 1
+        assert anns[0][1][:1] == PROTOCOL_PREFIX
+
+    def test_vault_deposit_announcement_matches_pool_expected_format(self):
+        """Vault CREATE_PUZZLE_ANNOUNCEMENT content == PROTOCOL_PREFIX + sha256tree(list 'o' deed_id)."""
+        sol = Program.to([
+            VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+            0x6f,
+            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+        ])
+        conds = self.vault_bls.run(sol).as_python()
+        ann_content = [c for c in conds if c[0] == bytes([62])][0][1]
+
+        expected = PROTOCOL_PREFIX + Program.to([0x6f, DEED_LAUNCHER_ID]).get_tree_hash()
+        assert ann_content == expected, (
+            f"Vault deposit announcement mismatch:\n"
+            f"  Got:      {ann_content.hex()}\n"
+            f"  Expected: {expected.hex()}"
+        )
+
+    def test_vault_deposit_agg_sig_bound_to_deed_id(self):
+        """AGG_SIG_ME message changes when deed_launcher_id changes — replay protection."""
+        def run_msg(deed_id):
+            sol = Program.to([
+                VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+                0x6f,
+                [deed_id, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+            ])
+            conds = self.vault_bls.run(sol).as_python()
+            agg_sigs = [c for c in conds if c[0] == bytes([50])]
+            assert len(agg_sigs) == 1
+            return agg_sigs[0][2]
+
+        msg_a = run_msg(bytes32(b"\xaa" * 32))
+        msg_b = run_msg(bytes32(b"\xbb" * 32))
+        assert msg_a != msg_b, "AGG_SIG_ME message must be bound to deed_launcher_id"
+
+    def test_vault_deposit_recreates_singleton(self):
+        """Vault always recreates itself at the same inner puzzle hash."""
+        sol = Program.to([
+            VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+            0x6f,
+            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+        ])
+        conds = self.vault_bls.run(sol).as_python()
+        creates = [c for c in conds if c[0] == bytes([51])]
+        assert len(creates) == 1
+        assert creates[0][1] == self.vault_inner_puzhash
+
+    # ── Receive ('i') ─────────────────────────────────────────────────────
+
+    def test_vault_receive_emits_puzzle_announcement_for_p2_vault(self):
+        """Vault 'i' emits CREATE_PUZZLE_ANNOUNCEMENT so p2_vault can co-spend atomically."""
+        p2_vault_coin_id = bytes32(b"\xb2" * 32)
+        sol = Program.to([
+            VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+            0x69,  # 'i'
+            [DEED_LAUNCHER_ID, self.pool_inner_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
+        ])
+        conds = self.vault_bls.run(sol).as_python()
+        create_anns = [c for c in conds if c[0] == bytes([62])]
+        assert len(create_anns) == 1
+        assert create_anns[0][1][:1] == PROTOCOL_PREFIX
+        # Content: PREFIX + sha256tree(list vault_coin_id deed_launcher_id vault_inner_puzhash)
+        expected = PROTOCOL_PREFIX + Program.to(
+            [VAULT_COIN_ID, DEED_LAUNCHER_ID, self.vault_inner_puzhash]
+        ).get_tree_hash()
+        assert create_anns[0][1] == expected, (
+            f"Vault 'i' announcement mismatch:\n"
+            f"  Got:      {create_anns[0][1].hex()}\n"
+            f"  Expected: {expected.hex()}"
+        )
+
+    def test_vault_receive_asserts_coin_announcement_from_p2_vault(self):
+        """Vault 'i' asserts ASSERT_COIN_ANNOUNCEMENT (opcode 61) from p2_vault."""
+        p2_vault_coin_id = bytes32(b"\xb2" * 32)
+        sol = Program.to([
+            VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+            0x69,
+            [DEED_LAUNCHER_ID, self.pool_inner_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
+        ])
+        conds = self.vault_bls.run(sol).as_python()
+        # ASSERT_COIN_ANNOUNCEMENT = opcode 61
+        assert_coin_anns = [c for c in conds if c[0] == bytes([61])]
+        assert len(assert_coin_anns) == 1
+
+    def test_vault_receive_agg_sig_differs_from_deposit(self):
+        """AGG_SIG_ME message for 'i' must differ from 'o' — cross-case replay protection."""
+        p2_vault_coin_id = bytes32(b"\xb2" * 32)
+
+        def run_msg(case):
+            if case == 0x69:
+                p = [DEED_LAUNCHER_ID, self.pool_inner_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None]
+            else:
+                p = [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None]
+            sol = Program.to([
+                VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+                case, p,
+            ])
+            conds = self.vault_bls.run(sol).as_python()
+            return [c for c in conds if c[0] == bytes([50])][0][2]
+
+        msg_deposit = run_msg(0x6f)
+        msg_receive = run_msg(0x69)
+        assert msg_deposit != msg_receive, "AGG_SIG_ME messages must differ between spend cases"
+
+    # ── Accept offer ('a') ────────────────────────────────────────────────
+
+    def test_vault_accept_offer_agg_sig_bound_to_token_amount(self):
+        """AGG_SIG_ME message for 'a' is bound to token_amount — prevents price manipulation."""
+        def run_msg(token_amount):
+            sol = Program.to([
+                VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+                0x61,  # 'a'
+                [DEED_LAUNCHER_ID, token_amount, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+            ])
+            conds = self.vault_bls.run(sol).as_python()
+            return [c for c in conds if c[0] == bytes([50])][0][2]
+
+        msg_100 = run_msg(100_000)
+        msg_200 = run_msg(200_000)
+        assert msg_100 != msg_200, "AGG_SIG_ME for accept-offer must be bound to token_amount"
+
+    # ── Auth-type isolation ───────────────────────────────────────────────
+
+    def test_bls_and_secp_vault_puzzle_hashes_differ(self):
+        """BLS and secp256k1 vaults must not share a puzzle hash."""
+        assert curry_vault_bls_e2e().get_tree_hash() != curry_vault_secp_e2e().get_tree_hash()
+
+    def test_two_bls_vaults_different_owners_differ(self):
+        """Two BLS vaults with different owner pubkeys must have different puzzle hashes."""
+        vault_a = VAULT_INNER_MOD.curry(
+            VAULT_SINGLETON_STRUCT_E2E,
+            bytes(48),
+            AUTH_TYPE_BLS,
+            VAULT_MEMBERS_MERKLE_ROOT_E2E,
+            SINGLETON_MOD_HASH,
+            POOL_LAUNCHER_ID,
+            SINGLETON_LAUNCHER_HASH,
+        )
+        vault_b = VAULT_INNER_MOD.curry(
+            VAULT_SINGLETON_STRUCT_E2E,
+            bytes([1] * 48),
+            AUTH_TYPE_BLS,
+            VAULT_MEMBERS_MERKLE_ROOT_E2E,
+            SINGLETON_MOD_HASH,
+            POOL_LAUNCHER_ID,
+            SINGLETON_LAUNCHER_HASH,
+        )
+        assert vault_a.get_tree_hash() != vault_b.get_tree_hash()
+
+    def test_vault_from_different_launcher_ids_differ(self):
+        """Same owner and auth type but different vault_launcher_id → different puzzle hash."""
+        launcher_a = bytes32(b"\xa0" * 32)
+        launcher_b = bytes32(b"\xa1" * 32)
+
+        def make_vault(lid):
+            struct = Program.to((SINGLETON_MOD_HASH, (lid, SINGLETON_LAUNCHER_HASH)))
+            return VAULT_INNER_MOD.curry(
+                struct,
+                VAULT_OWNER_PUBKEY_BLS,
+                AUTH_TYPE_BLS,
+                VAULT_MEMBERS_MERKLE_ROOT_E2E,
+                SINGLETON_MOD_HASH,
+                POOL_LAUNCHER_ID,
+                SINGLETON_LAUNCHER_HASH,
+            )
+
+        assert make_vault(launcher_a).get_tree_hash() != make_vault(launcher_b).get_tree_hash()
+
+    # ── Full vault lifecycle co-spend ─────────────────────────────────────
+
+    def test_vault_deposit_receive_round_trip_condition_pairing(self):
+        """Full vault round-trip: vault deposit → pool accept → vault receive.
+
+        Verifies the announcement chain at the condition level:
+          vault 'o' → CREATE_PUZZLE_ANNOUNCEMENT → pool asserts on SPEND_DEPOSIT
+          pool REDEEM → CREATE_PUZZLE_ANNOUNCEMENT → vault 'i' asserts
+
+        This is the core security property: neither side can act without the other's
+        announcement being present in the same block.
+        """
+        # ── Step 1: Vault deposit ──
+        vault_deposit_sol = Program.to([
+            VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+            0x6f,
+            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+        ])
+        vault_deposit_conds = self.vault_bls.run(vault_deposit_sol).as_python()
+        vault_ann_content = [c for c in vault_deposit_conds if c[0] == bytes([62])][0][1]
+
+        # Expected: PROTOCOL_PREFIX + sha256tree(list 'o' deed_launcher_id)
+        expected_vault_ann = PROTOCOL_PREFIX + Program.to(
+            [0x6f, DEED_LAUNCHER_ID]
+        ).get_tree_hash()
+        assert vault_ann_content == expected_vault_ann, "Vault deposit announcement wrong"
+
+        # ── Step 2: Pool redeem (which the vault receive step 3 asserts) ──
+        pool_inner_1 = curry_pool(pool_status=POOL_ACTIVE, tvl=PAR_VALUE, deed_count=1)
+        pool_inner_1_ph = pool_inner_1.get_tree_hash()
+        pool_redeem_sol = Program.to([
+            POOL_COIN_ID, pool_inner_1_ph, 1,
+            POOL_SPEND_REDEEM,
+            [DEED_COIN_ID, PAR_VALUE, VAULT_LAUNCHER_ID, SINGLETON_LAUNCHER_HASH, TOKEN_COIN_ID],
+        ])
+        pool_redeem_conds = pool_inner_1.run(pool_redeem_sol).as_python()
+        pool_ann = extract_cond(pool_redeem_conds, 62)
+        pool_ann_content = pool_ann[1]
+
+        # ── Step 3: Vault receive — emits puzzle announcement, asserts coin announcement ──
+        p2_vault_coin_id = bytes32(b"\xb2" * 32)
+        vault_receive_sol = Program.to([
+            VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+            0x69,
+            [DEED_LAUNCHER_ID, pool_inner_1_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
+        ])
+        vault_receive_conds = self.vault_bls.run(vault_receive_sol).as_python()
+
+        # Vault 'i' emits CREATE_PUZZLE_ANNOUNCEMENT so p2_vault can assert it
+        vault_receive_anns = [c for c in vault_receive_conds if c[0] == bytes([62])]
+        assert len(vault_receive_anns) == 1
+        expected_vault_receive_ann = PROTOCOL_PREFIX + Program.to(
+            [VAULT_COIN_ID, DEED_LAUNCHER_ID, self.vault_inner_puzhash]
+        ).get_tree_hash()
+        assert vault_receive_anns[0][1] == expected_vault_receive_ann, (
+            f"Vault receive announcement wrong:\n"
+            f"  Got:      {vault_receive_anns[0][1].hex()}\n"
+            f"  Expected: {expected_vault_receive_ann.hex()}"
+        )
+
+        # Vault 'i' asserts COIN_ANNOUNCEMENT from p2_vault (opcode 61)
+        vault_coin_ann_asserts = [c for c in vault_receive_conds if c[0] == bytes([61])]
+        assert len(vault_coin_ann_asserts) == 1, "Vault receive must ASSERT_COIN_ANNOUNCEMENT from p2_vault"
+
+        # Both vault spends recreate the vault singleton
+        vault_recreates = [c for c in vault_deposit_conds if c[0] == bytes([51])]
+        assert vault_recreates[0][1] == self.vault_inner_puzhash, "Vault must recreate after deposit"
+
+        vault_receive_creates = [c for c in vault_receive_conds if c[0] == bytes([51])]
+        assert vault_receive_creates[0][1] == self.vault_inner_puzhash, "Vault must recreate after receive"

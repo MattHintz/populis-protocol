@@ -14,4 +14,11 @@
       inner_puzzle_hash
     )
   )
+
+  (defun merge-lists (list_a list_b)
+    (if list_a
+      (c (f list_a) (merge-lists (r list_a) list_b))
+      list_b
+    )
+  )
 )
