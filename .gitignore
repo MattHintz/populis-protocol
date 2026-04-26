@@ -27,5 +27,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Backup files (left by editors / refactors)
+*.bak
+
 # Docs — internal design docs excluded from public repo for now
 docs/*.md

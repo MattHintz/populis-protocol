@@ -40,6 +40,12 @@
     (defconstant ASSERT_HEIGHT_RELATIVE 82) ; Assert relative block height
     (defconstant ASSERT_HEIGHT_ABSOLUTE 83) ; Assert absolute block height
 
+    ;; Upper-bound time / height assertions (CHIP-0014)
+    (defconstant ASSERT_BEFORE_SECONDS_RELATIVE 84) ; Assert before relative seconds
+    (defconstant ASSERT_BEFORE_SECONDS_ABSOLUTE 85) ; Assert before absolute seconds
+    (defconstant ASSERT_BEFORE_HEIGHT_RELATIVE 86) ; Assert before relative block height
+    (defconstant ASSERT_BEFORE_HEIGHT_ABSOLUTE 87) ; Assert before absolute block height
+
     ;; A condition that is always true and always ignores all arguments
     (defconstant REMARK 1) ; Remark condition
 )

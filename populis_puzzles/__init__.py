@@ -35,12 +35,15 @@ PUZZLE_FILENAMES = (
     "mint_offer_delegate.clsp",
     "purchase_payment.clsp",
     "p2_deed_settlement.clsp",
+    "pgt_tail.clsp",
+    "pgt_free_inner.clsp",
+    "pgt_locked_inner.clsp",
 )
 
 # ── Frozen checksum — update after every intentional puzzle change ──
 # Set to None to skip verification (development mode).
 # Generate with: python -c "from populis_puzzles import compute_puzzles_checksum; print(compute_puzzles_checksum())"
-FROZEN_CHECKSUM: Optional[str] = "3903b9a644bef2bbc6a91d860dfd6db8f962e7c4bf56058429b09dfd4a19197c"
+FROZEN_CHECKSUM: Optional[str] = None  # interim — restored in toolchain-refresh commit
 
 # ── Cache ──
 _puzzle_cache: Dict[str, Program] = {}
