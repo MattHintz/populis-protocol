@@ -75,6 +75,41 @@ AUTH_TYPE_SECP256R1 = 2  # Passkey / WebAuthn secp256r1
 AUTH_TYPE_SECP256K1 = 3  # EVM wallet secp256k1 (EIP-712)
 
 
+# ── Deterministic vault discovery hint (CHIP-22) ──────────────────────────
+# When the faucet creates the singleton launcher coin during registration,
+# we attach a deterministic hint derived from the user's pubkey + auth type.
+# This makes the vault discoverable from chain alone — given just the user's
+# pubkey, any client can call `get_coin_records_by_hint` to find the launcher
+# without consulting the backend.
+#
+# The hint is namespaced per auth type so EVM and BLS pubkeys producing the
+# same byte sequence (vanishingly unlikely but possible) cannot collide.
+#
+# Format: sha256(VAULT_HINT_DOMAIN || auth_type_byte || owner_pubkey_bytes)
+VAULT_HINT_DOMAIN = b"populis-vault-discovery-v1"
+
+
+def vault_discovery_hint(auth_type: int, owner_pubkey: bytes) -> bytes32:
+    """Deterministic 32-byte hint for vault discovery via CHIP-22 hints.
+
+    Args:
+        auth_type: AUTH_TYPE_BLS / AUTH_TYPE_SECP256R1 / AUTH_TYPE_SECP256K1
+        owner_pubkey: the raw owner pubkey bytes (48 for BLS, 33 for secp).
+
+    Returns:
+        32-byte hint to attach as the first memo of the launcher CREATE_COIN.
+    """
+    import hashlib
+    if auth_type not in (AUTH_TYPE_BLS, AUTH_TYPE_SECP256R1, AUTH_TYPE_SECP256K1):
+        raise ValueError(f"Unsupported auth_type: {auth_type}")
+    if not isinstance(owner_pubkey, (bytes, bytearray)):
+        raise TypeError("owner_pubkey must be bytes")
+    digest = hashlib.sha256(
+        VAULT_HINT_DOMAIN + bytes([auth_type]) + bytes(owner_pubkey)
+    ).digest()
+    return bytes32(digest)
+
+
 # ---------------------------------------------------------------------------
 # EIP-712 domain declaration — single source of truth.
 #
@@ -617,11 +652,9 @@ def build_create_vault_bundle(
     parent_solution = Program.to([Program.to(conditions), []])
 
     parent_spend = make_spend(parent_coin, parent_puzzle, parent_solution)
-    launcher_spend = make_spend(
-        launcher_coin,
-        SerializedProgram.from_program(SINGLETON_LAUNCHER),
-        SerializedProgram.from_program(launcher_solution),
-    )
+    # chia-rs 0.41's `make_spend` accepts Program directly and handles serialization.
+    # (`SerializedProgram.from_program` does not exist on this version.)
+    launcher_spend = make_spend(launcher_coin, SINGLETON_LAUNCHER, launcher_solution)
 
     unsigned_bundle = SpendBundle([parent_spend, launcher_spend], G2Element())
     return unsigned_bundle, vault_launcher_id
