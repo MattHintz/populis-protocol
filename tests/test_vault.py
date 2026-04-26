@@ -181,7 +181,7 @@ class TestVaultBLSDepositToPool:
         sol = Program.to([
             self.my_id, self.my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = self.curried.run(sol).as_python()
         # AGG_SIG_ME, CREATE_PUZZLE_ANNOUNCEMENT, CREATE_COIN, REMARK,
@@ -193,7 +193,7 @@ class TestVaultBLSDepositToPool:
         sol = Program.to([
             self.my_id, self.my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = self.curried.run(sol).as_python()
         agg_sig = extract_cond(conds, OP_AGG_SIG_ME)
@@ -203,7 +203,7 @@ class TestVaultBLSDepositToPool:
         sol = Program.to([
             self.my_id, self.my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = self.curried.run(sol).as_python()
         ann = extract_cond(conds, OP_CREATE_PUZZLE_ANN)
@@ -213,7 +213,7 @@ class TestVaultBLSDepositToPool:
         sol = Program.to([
             self.my_id, self.my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = self.curried.run(sol).as_python()
         create = extract_cond(conds, OP_CREATE_COIN)
@@ -223,7 +223,7 @@ class TestVaultBLSDepositToPool:
         sol = Program.to([
             self.my_id, self.my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = self.curried.run(sol).as_python()
         coin_id_cond = extract_cond(conds, OP_ASSERT_MY_COIN_ID)
@@ -247,7 +247,7 @@ class TestVaultBLSReceiveFromPool:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_RECEIVE_FROM_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
         # 10 conditions: AGG_SIG_ME, CREATE_PUZZLE_ANN, ASSERT_COIN_ANN, CREATE_COIN, REMARK,
@@ -264,7 +264,7 @@ class TestVaultBLSReceiveFromPool:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_RECEIVE_FROM_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
         ann = extract_cond(conds, OP_CREATE_PUZZLE_ANN)
@@ -286,7 +286,7 @@ class TestVaultBLSReceiveFromPool:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_RECEIVE_FROM_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
         # ASSERT_COIN_ANNOUNCEMENT = opcode 61
@@ -305,7 +305,7 @@ class TestVaultBLSReceiveFromPool:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_RECEIVE_FROM_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
         create = extract_cond(conds, OP_CREATE_COIN)
@@ -357,7 +357,7 @@ class TestVaultSecpPath:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, fake_sig],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, fake_sig],
         ])
         # The softfork will fail with zero sig (expected) but AGG_SIG_ME must not be present
         try:
@@ -435,9 +435,9 @@ class TestVaultSecp256k1RealSignature:
 
         # 4. Run the puzzle.  With the fix in place, verify_secp256k1 succeeds.
         if spend_case_byte == SPEND_DEPOSIT_TO_POOL:
-            p = [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, sig64]
+            p = [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, sig64]
         else:
-            p = [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, sig64]
+            p = [DEED_LAUNCHER_ID, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, sig64]
         sol = Program.to([my_id, my_inner_puzhash, 1, spend_case_byte, p])
         conds = curried.run(sol).as_python()
 
@@ -481,7 +481,7 @@ class TestVaultSecp256k1RealSignature:
         sol = Program.to([
             my_id_b, my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, sig64],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, sig64],
         ])
         with pytest.raises(Exception):
             curried.run(sol)
@@ -517,7 +517,7 @@ class TestVaultSecurityGating:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         with pytest.raises(Exception):
             bad_vault.run(sol)
@@ -530,23 +530,15 @@ class TestVaultSecurityGating:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [bytes(16), POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],  # 16 bytes — too short
+            [bytes(16), CURRENT_TIMESTAMP, None],  # 16 bytes — too short
         ])
         with pytest.raises(Exception):
             curried.run(sol)
 
-    def test_short_pool_inner_puzhash_raises(self):
-        """pool_inner_puzhash shorter than 32 bytes must fail is-size-b32."""
-        curried = curry_vault_bls()
-        my_id = bytes32(b"\x11" * 32)
-        my_inner_puzhash = curried.get_tree_hash()
-        sol = Program.to([
-            my_id, my_inner_puzhash, 1,
-            SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, bytes(16), CURRENT_TIMESTAMP, None],  # 16 bytes — too short
-        ])
-        with pytest.raises(Exception):
-            curried.run(sol)
+    # LOW-13 fix (2026-04-26): the prior `test_short_pool_inner_puzhash_raises`
+    # test was deleted because its target parameter (`pool_inner_puzhash`) is
+    # no longer in the 'o' / 'i' solution shape.  The 'a' (accept_offer) case
+    # still uses pool_inner_puzhash and is covered by tests in TestVaultBLSAcceptOffer.
 
     def test_zero_my_amount_raises(self):
         """my_amount == 0 must fail — zero-amount singletons are non-standard and
@@ -557,7 +549,7 @@ class TestVaultSecurityGating:
         sol = Program.to([
             my_id, my_inner_puzhash, 0,  # zero amount
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         with pytest.raises(Exception):
             curried.run(sol)
@@ -571,7 +563,7 @@ class TestVaultSecurityGating:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_RECEIVE_FROM_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, my_id, CURRENT_TIMESTAMP, None],  # p2_vault_coin_id == my_id
+            [DEED_LAUNCHER_ID, my_id, CURRENT_TIMESTAMP, None],  # p2_vault_coin_id == my_id
         ])
         with pytest.raises(Exception):
             curried.run(sol)
@@ -590,7 +582,7 @@ class TestVaultSecurityGating:
             sol = Program.to([
                 my_id, my_inner_puzhash, 1,
                 SPEND_DEPOSIT_TO_POOL,
-                [deed_id, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+                [deed_id, CURRENT_TIMESTAMP, None],
             ])
             conds = curried.run(sol).as_python()
             return extract_cond(conds, OP_CREATE_PUZZLE_ANN)[1]
@@ -607,9 +599,9 @@ class TestVaultSecurityGating:
 
         def run_case(case):
             if case == SPEND_RECEIVE_FROM_POOL:
-                p = [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None]
+                p = [DEED_LAUNCHER_ID, P2_VAULT_COIN_ID, CURRENT_TIMESTAMP, None]
             else:
-                p = [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None]
+                p = [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None]
             sol = Program.to([
                 my_id, my_inner_puzhash, 1, case, p,
             ])
@@ -633,7 +625,7 @@ class TestVaultDepositReceiveAnnouncementPairing:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
         ann = extract_cond(conds, OP_CREATE_PUZZLE_ANN)
@@ -935,7 +927,8 @@ class TestVaultUpdateKeys:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             self.SPEND_UPDATE_KEYS,
-            [vault_mod_hash, new_pubkey, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
+            # LOW-11 fix: 'k' params now include new_auth_type after new_owner_pubkey.
+            [vault_mod_hash, new_pubkey, AUTH_TYPE_BLS, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
         create_coins = [c for c in conds if c[0] == OP_CREATE_COIN]
@@ -956,13 +949,126 @@ class TestVaultUpdateKeys:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             self.SPEND_UPDATE_KEYS,
-            [vault_mod_hash, new_pubkey, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
+            # LOW-11 fix: 'k' params now include new_auth_type after new_owner_pubkey.
+            [vault_mod_hash, new_pubkey, AUTH_TYPE_BLS, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
         create_coins = [c for c in conds if c[0] == OP_CREATE_COIN]
         new_inner_ph = create_coins[0][1]
         # The new inner puzzle hash must differ from the current one
         assert new_inner_ph != my_inner_puzhash
+
+    # ── LOW-11 + LOW-12 regression tests ────────────────────────────────
+    # Pre-fix: 'k' did not accept a new_auth_type — AUTH_TYPE was frozen
+    # for the life of the vault, and new_owner_pubkey was not size-checked
+    # against the auth type, so an owner could self-DoS by rotating to a
+    # wrong-size key.  Post-fix: new_auth_type ∈ {1,2,3} and pubkey size
+    # must match (BLS=48, secp256r1=65, secp256k1=33).
+
+    def test_update_keys_rejects_invalid_new_auth_type(self):
+        """LOW-11: new_auth_type=99 (out of range) must be rejected."""
+        pubkey = BLS_OWNER_PUBKEY
+        curried = self._curry_with_real_merkle_root(pubkey)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        vault_mod_hash = VAULT_INNER_MOD.get_tree_hash()
+        new_pubkey = bytes([2] * 48)
+        new_root = self._one_leaf_root(new_pubkey)
+        one_leaf_proof = Program.to((0, []))
+
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            self.SPEND_UPDATE_KEYS,
+            [vault_mod_hash, new_pubkey, 99, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
+        ])
+        with pytest.raises(ValueError):
+            curried.run(sol)
+
+    def test_update_keys_rejects_bls_with_wrong_size_pubkey(self):
+        """LOW-12: declaring BLS but supplying a 33-byte (secp-sized) pubkey rejected."""
+        pubkey = BLS_OWNER_PUBKEY
+        curried = self._curry_with_real_merkle_root(pubkey)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        vault_mod_hash = VAULT_INNER_MOD.get_tree_hash()
+        new_pubkey_wrong_size = bytes([2] * 33)  # 33 bytes ≠ BLS's 48
+        new_root = self._one_leaf_root(new_pubkey_wrong_size)
+        one_leaf_proof = Program.to((0, []))
+
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            self.SPEND_UPDATE_KEYS,
+            [vault_mod_hash, new_pubkey_wrong_size, AUTH_TYPE_BLS, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
+        ])
+        with pytest.raises(ValueError):
+            curried.run(sol)
+
+    def test_update_keys_rejects_secp256k1_with_wrong_size_pubkey(self):
+        """LOW-12: declaring secp256k1 but supplying a 48-byte (BLS-sized) pubkey rejected."""
+        pubkey = BLS_OWNER_PUBKEY
+        curried = self._curry_with_real_merkle_root(pubkey)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        vault_mod_hash = VAULT_INNER_MOD.get_tree_hash()
+        new_pubkey_wrong_size = bytes([2] * 48)  # 48 bytes ≠ secp256k1's 33
+        new_root = self._one_leaf_root(new_pubkey_wrong_size)
+        one_leaf_proof = Program.to((0, []))
+
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            self.SPEND_UPDATE_KEYS,
+            [vault_mod_hash, new_pubkey_wrong_size, 3, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
+        ])
+        with pytest.raises(ValueError):
+            curried.run(sol)
+
+    def test_update_keys_allows_bls_to_secp256k1_migration_destination(self):
+        """LOW-11: rotating from BLS to secp256k1 produces a CREATE_COIN whose
+        destination differs from a BLS-to-BLS rotation (proves new_auth_type
+        is actually used in the destination computation).
+
+        Note: the puzzle still requires BLS authentication on the CURRENT key
+        for the rotation itself (secp_signing for 'k' is the deferred CRIT-2
+        extension).  The migration target curve can still differ.
+        """
+        pubkey = BLS_OWNER_PUBKEY
+        curried = self._curry_with_real_merkle_root(pubkey)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        vault_mod_hash = VAULT_INNER_MOD.get_tree_hash()
+
+        # 33-byte secp256k1 pubkey (will be the new owner key)
+        new_secp_pubkey = bytes([2] * 33)
+        new_root = self._one_leaf_root(new_secp_pubkey)
+        one_leaf_proof = Program.to((0, []))
+
+        sol_secp = Program.to([
+            my_id, my_inner_puzhash, 1,
+            self.SPEND_UPDATE_KEYS,
+            [vault_mod_hash, new_secp_pubkey, 3, new_root, one_leaf_proof, CURRENT_TIMESTAMP, None],
+        ])
+        conds_secp = curried.run(sol_secp).as_python()
+        create_coins_secp = [c for c in conds_secp if c[0] == OP_CREATE_COIN]
+        secp_dest = create_coins_secp[0][1]
+
+        # Same merkle root, but rotate to a BLS pubkey of the same byte content
+        # (different size).  The destinations must differ because new_auth_type
+        # is curried into the new inner puzzle hash.
+        new_bls_pubkey = bytes([2] * 48)
+        new_root_bls = self._one_leaf_root(new_bls_pubkey)
+        sol_bls = Program.to([
+            my_id, my_inner_puzhash, 1,
+            self.SPEND_UPDATE_KEYS,
+            [vault_mod_hash, new_bls_pubkey, AUTH_TYPE_BLS, new_root_bls, one_leaf_proof, CURRENT_TIMESTAMP, None],
+        ])
+        conds_bls = curried.run(sol_bls).as_python()
+        create_coins_bls = [c for c in conds_bls if c[0] == OP_CREATE_COIN]
+        bls_dest = create_coins_bls[0][1]
+
+        # Different new_auth_type → different curried hash → different destination.
+        assert secp_dest != bls_dest, (
+            "rotating to secp256k1 vs BLS must produce different destinations"
+        )
 
 
 class TestVaultSecp256r1Dispatch:
@@ -996,7 +1102,7 @@ class TestVaultSecp256r1Dispatch:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_DEPOSIT_TO_POOL,
-            [DEED_LAUNCHER_ID, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, bad_sig],
+            [DEED_LAUNCHER_ID, CURRENT_TIMESTAMP, bad_sig],
         ])
         exc = None
         try:
@@ -1293,7 +1399,6 @@ class TestEVMWalletLoginEndToEnd:
             members_merkle_root=members_root,
             pool_launcher_id=pool_launcher_id,
             deed_launcher_id=DEED_LAUNCHER_ID,
-            pool_inner_puzhash=POOL_INNER_PUZHASH,
             current_timestamp=CURRENT_TIMESTAMP,
             lineage_proof=lineage,
             signature_data=compact,
@@ -1384,7 +1489,6 @@ class TestEVMWalletLoginEndToEnd:
             members_merkle_root=members_root,
             pool_launcher_id=POOL_LAUNCHER_ID,
             deed_launcher_id=DEED_LAUNCHER_ID,  # not the deed the sig committed to
-            pool_inner_puzhash=POOL_INNER_PUZHASH,
             current_timestamp=CURRENT_TIMESTAMP,
             lineage_proof=LineageProof(parent_name=genesis_parent, amount=uint64(1)),
             signature_data=compact,

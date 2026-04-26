@@ -1571,7 +1571,7 @@ class TestPhase10VaultCoSpend:
         sol = Program.to([
             VAULT_COIN_ID, self.vault_inner_puzhash, 1,
             0x6f,  # 'o'
-            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, VAULT_CURRENT_TIMESTAMP, None],
         ])
         conds = self.vault_bls.run(sol).as_python()
 
@@ -1584,7 +1584,7 @@ class TestPhase10VaultCoSpend:
         sol = Program.to([
             VAULT_COIN_ID, self.vault_inner_puzhash, 1,
             0x6f,
-            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, VAULT_CURRENT_TIMESTAMP, None],
         ])
         conds = self.vault_bls.run(sol).as_python()
         ann_content = [c for c in conds if c[0] == bytes([62])][0][1]
@@ -1602,7 +1602,7 @@ class TestPhase10VaultCoSpend:
             sol = Program.to([
                 VAULT_COIN_ID, self.vault_inner_puzhash, 1,
                 0x6f,
-                [deed_id, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+                [deed_id, VAULT_CURRENT_TIMESTAMP, None],
             ])
             conds = self.vault_bls.run(sol).as_python()
             agg_sigs = [c for c in conds if c[0] == bytes([50])]
@@ -1618,7 +1618,7 @@ class TestPhase10VaultCoSpend:
         sol = Program.to([
             VAULT_COIN_ID, self.vault_inner_puzhash, 1,
             0x6f,
-            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, VAULT_CURRENT_TIMESTAMP, None],
         ])
         conds = self.vault_bls.run(sol).as_python()
         creates = [c for c in conds if c[0] == bytes([51])]
@@ -1633,7 +1633,7 @@ class TestPhase10VaultCoSpend:
         sol = Program.to([
             VAULT_COIN_ID, self.vault_inner_puzhash, 1,
             0x69,  # 'i'
-            [DEED_LAUNCHER_ID, self.pool_inner_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
         ])
         conds = self.vault_bls.run(sol).as_python()
         create_anns = [c for c in conds if c[0] == bytes([62])]
@@ -1655,7 +1655,7 @@ class TestPhase10VaultCoSpend:
         sol = Program.to([
             VAULT_COIN_ID, self.vault_inner_puzhash, 1,
             0x69,
-            [DEED_LAUNCHER_ID, self.pool_inner_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
         ])
         conds = self.vault_bls.run(sol).as_python()
         # ASSERT_COIN_ANNOUNCEMENT = opcode 61
@@ -1668,9 +1668,9 @@ class TestPhase10VaultCoSpend:
 
         def run_msg(case):
             if case == 0x69:
-                p = [DEED_LAUNCHER_ID, self.pool_inner_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None]
+                p = [DEED_LAUNCHER_ID, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None]
             else:
-                p = [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None]
+                p = [DEED_LAUNCHER_ID, VAULT_CURRENT_TIMESTAMP, None]
             sol = Program.to([
                 VAULT_COIN_ID, self.vault_inner_puzhash, 1,
                 case, p,
@@ -1762,7 +1762,7 @@ class TestPhase10VaultCoSpend:
         vault_deposit_sol = Program.to([
             VAULT_COIN_ID, self.vault_inner_puzhash, 1,
             0x6f,
-            [DEED_LAUNCHER_ID, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+            [DEED_LAUNCHER_ID, VAULT_CURRENT_TIMESTAMP, None],
         ])
         vault_deposit_conds = self.vault_bls.run(vault_deposit_sol).as_python()
         vault_ann_content = [c for c in vault_deposit_conds if c[0] == bytes([62])][0][1]
@@ -1790,7 +1790,8 @@ class TestPhase10VaultCoSpend:
         vault_receive_sol = Program.to([
             VAULT_COIN_ID, self.vault_inner_puzhash, 1,
             0x69,
-            [DEED_LAUNCHER_ID, pool_inner_1_ph, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
+            # LOW-13: 'i' solution dropped pool_inner_puzhash (was unused).
+            [DEED_LAUNCHER_ID, p2_vault_coin_id, VAULT_CURRENT_TIMESTAMP, None],
         ])
         vault_receive_conds = self.vault_bls.run(vault_receive_sol).as_python()
 

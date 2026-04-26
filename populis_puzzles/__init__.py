@@ -43,7 +43,7 @@ PUZZLE_FILENAMES = (
 # ── Frozen checksum — update after every intentional puzzle change ──
 # Set to None to skip verification (development mode).
 # Generate with: python -c "from populis_puzzles import compute_puzzles_checksum; print(compute_puzzles_checksum())"
-FROZEN_CHECKSUM: Optional[str] = "3531fa48a49facd8d4d430a94fa9b808e7a07cae2a1601f87855a8d865793e22"
+FROZEN_CHECKSUM: Optional[str] = "05ae4a9c80f86d529124e1aa6aeedbeb874eaa8f81d396101325092b662514b9"
 
 # ── Cache ──
 _puzzle_cache: Dict[str, Program] = {}

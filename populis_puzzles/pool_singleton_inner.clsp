@@ -247,12 +247,19 @@
 
     ;; SPEND CASE 4 — GOVERNANCE
     ;; params = (new_status gov_inner_puzhash gov_singleton_struct)
+    ;;
+    ;; LOW-10 fix (2026-04-26): validate new_status is in the canonical set
+    ;; {0=FROZEN, 1=ACTIVE}.  Pre-fix, governance could write any integer
+    ;; into POOL_STATUS, permanently bricking spend cases that check
+    ;; (= POOL_STATUS POOL_ACTIVE).
     (defun spend_governance (MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH TOKEN_TAIL_HASH CAT_MOD_HASH OFFER_MOD_HASH P2_VAULT_MOD_HASH FP_SCALE
                              TOTAL_VALUE_LOCKED DEED_COUNT
                              my_id my_inner_puzzlehash my_amount
                              new_status gov_inner_puzhash gov_singleton_struct)
         (assert
             (is-size-b32 gov_inner_puzhash)
+            ;; LOW-10 fix: new_status MUST be 0 (FROZEN) or 1 (ACTIVE).
+            (any (= new_status 0) (= new_status 1))
             (c
                 (list CREATE_COIN
                     (compute_inner_ph MOD_HASH SINGLETON_STRUCT PROTOCOL_DID_PUZHASH TOKEN_TAIL_HASH CAT_MOD_HASH OFFER_MOD_HASH P2_VAULT_MOD_HASH FP_SCALE

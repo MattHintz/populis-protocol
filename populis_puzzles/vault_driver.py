@@ -423,10 +423,13 @@ def launcher_coin_for_parent(parent_coin: Coin) -> Coin:
 #
 # Solution shapes (inner puzzle `vault_singleton_inner.clsp`):
 #   'o' deposit: (my_id my_inner_puzhash my_amount SPEND_CASE
-#                  (deed_launcher_id pool_inner_puzhash current_timestamp signature_data))
+#                  (deed_launcher_id current_timestamp signature_data))
 #   'i' receive: (my_id my_inner_puzhash my_amount SPEND_CASE
-#                  (deed_launcher_id pool_inner_puzhash p2_vault_coin_id
+#                  (deed_launcher_id p2_vault_coin_id
 #                   current_timestamp signature_data))
+#
+# LOW-13 fix (2026-04-26): dropped the dead `pool_inner_puzhash` parameter
+# from both 'o' and 'i' — the puzzle never consumed it.  See SECURITY_AUDIT_2026_04_19.md.
 # ---------------------------------------------------------------------------
 
 # Spend-case byte literals — mirror `vault_singleton_inner.clsp`.
@@ -441,7 +444,6 @@ def _inner_solution_for_deposit(
     my_inner_puzhash: bytes32,
     my_amount: int,
     deed_launcher_id: bytes32,
-    pool_inner_puzhash: bytes32,
     current_timestamp: int,
     signature_data: Optional[bytes],
 ) -> Program:
@@ -460,7 +462,6 @@ def _inner_solution_for_deposit(
         SPEND_DEPOSIT_TO_POOL,
         [
             bytes(deed_launcher_id),
-            bytes(pool_inner_puzhash),
             int(current_timestamp),
             signature_data if signature_data is not None else b"",
         ],
@@ -472,7 +473,6 @@ def _inner_solution_for_receive(
     my_inner_puzhash: bytes32,
     my_amount: int,
     deed_launcher_id: bytes32,
-    pool_inner_puzhash: bytes32,
     p2_vault_coin_id: bytes32,
     current_timestamp: int,
     signature_data: Optional[bytes],
@@ -485,7 +485,6 @@ def _inner_solution_for_receive(
         SPEND_RECEIVE_FROM_POOL,
         [
             bytes(deed_launcher_id),
-            bytes(pool_inner_puzhash),
             bytes(p2_vault_coin_id),
             int(current_timestamp),
             signature_data if signature_data is not None else b"",
@@ -501,7 +500,6 @@ def build_vault_deposit_spend(
     members_merkle_root: bytes32,
     pool_launcher_id: bytes32,
     deed_launcher_id: bytes32,
-    pool_inner_puzhash: bytes32,
     current_timestamp: int,
     lineage_proof: LineageProof,
     signature_data: Optional[bytes] = None,
@@ -535,7 +533,6 @@ def build_vault_deposit_spend(
         my_inner_puzhash=inner_puzzle.get_tree_hash(),
         my_amount=int(vault_coin.amount),
         deed_launcher_id=deed_launcher_id,
-        pool_inner_puzhash=pool_inner_puzhash,
         current_timestamp=current_timestamp,
         signature_data=signature_data,
     )
@@ -553,7 +550,6 @@ def build_vault_receive_spend(
     members_merkle_root: bytes32,
     pool_launcher_id: bytes32,
     deed_launcher_id: bytes32,
-    pool_inner_puzhash: bytes32,
     p2_vault_coin_id: bytes32,
     current_timestamp: int,
     lineage_proof: LineageProof,
@@ -586,7 +582,6 @@ def build_vault_receive_spend(
         my_inner_puzhash=inner_puzzle.get_tree_hash(),
         my_amount=int(vault_coin.amount),
         deed_launcher_id=deed_launcher_id,
-        pool_inner_puzhash=pool_inner_puzhash,
         p2_vault_coin_id=p2_vault_coin_id,
         current_timestamp=current_timestamp,
         signature_data=signature_data,

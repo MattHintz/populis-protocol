@@ -287,6 +287,64 @@ class TestPoolGovernance:
         expected_new = curry_pool(pool_status=POOL_FROZEN, tvl=0, deed_count=0)
         assert conditions[0][1] == expected_new.get_tree_hash()
 
+    # ── LOW-10 regression tests ─────────────────────────────────────────
+    # Pre-fix: spend_governance accepted any integer for new_status, so
+    # governance could brick the pool by writing e.g. 2 (neither FROZEN
+    # nor ACTIVE).  Post-fix: only {0, 1} are accepted.
+    def test_governance_rejects_new_status_2(self):
+        """LOW-10: out-of-range positive status rejected."""
+        curried = curry_pool(pool_status=POOL_ACTIVE, tvl=0, deed_count=0)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        gov_singleton_struct = Program.to(
+            (SINGLETON_MOD_HASH, (bytes32(b"\xab" * 32), LAUNCHER_PUZZLE_HASH))
+        )
+        gov_inner_puzhash = bytes32(b"\xac" * 32)
+
+        sol = make_pool_solution(
+            my_id, my_inner_puzhash, 1,
+            POOL_SPEND_GOVERNANCE, [2, gov_inner_puzhash, gov_singleton_struct],
+        )
+        with pytest.raises(ValueError):
+            curried.run(sol)
+
+    def test_governance_rejects_new_status_99(self):
+        """LOW-10: arbitrary non-{0,1} integer rejected."""
+        curried = curry_pool(pool_status=POOL_ACTIVE, tvl=0, deed_count=0)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        gov_singleton_struct = Program.to(
+            (SINGLETON_MOD_HASH, (bytes32(b"\xab" * 32), LAUNCHER_PUZZLE_HASH))
+        )
+        gov_inner_puzhash = bytes32(b"\xac" * 32)
+
+        sol = make_pool_solution(
+            my_id, my_inner_puzhash, 1,
+            POOL_SPEND_GOVERNANCE, [99, gov_inner_puzhash, gov_singleton_struct],
+        )
+        with pytest.raises(ValueError):
+            curried.run(sol)
+
+    def test_governance_accepts_new_status_active(self):
+        """LOW-10: status=1 (ACTIVE) is the canonical complement of FROZEN; must succeed."""
+        curried = curry_pool(pool_status=POOL_FROZEN, tvl=0, deed_count=0)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        gov_singleton_struct = Program.to(
+            (SINGLETON_MOD_HASH, (bytes32(b"\xab" * 32), LAUNCHER_PUZZLE_HASH))
+        )
+        gov_inner_puzhash = bytes32(b"\xac" * 32)
+
+        sol = make_pool_solution(
+            my_id, my_inner_puzhash, 1,
+            POOL_SPEND_GOVERNANCE, [POOL_ACTIVE, gov_inner_puzhash, gov_singleton_struct],
+        )
+        # Should NOT raise; should produce 6 conditions including the
+        # CREATE_COIN that recreates the pool with POOL_ACTIVE.
+        result = curried.run(sol)
+        conditions = result.as_python()
+        assert len(conditions) == 6
+
 
 class TestPoolGating:
     """Test that invalid spend cases fail."""

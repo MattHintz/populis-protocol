@@ -214,16 +214,21 @@
   )
 
   ;; SPEND CASE 'o' — DEPOSIT TO POOL
-  ;; p = (deed_launcher_id pool_inner_puzhash current_timestamp signature_data)
+  ;; p = (deed_launcher_id current_timestamp signature_data)
   ;; current_timestamp: Unix seconds supplied by the spender; pinned to the block via time_bound_conditions.
   ;; signature_data: ignored for BLS, required 64-byte compact sig for secp256k1
+  ;;
+  ;; LOW-13 fix (2026-04-26): removed dead `pool_inner_puzhash` parameter.
+  ;; Pre-fix the puzzle accepted and size-validated this param but never
+  ;; consumed it; pure code smell + driver attack surface.  The 'a' (accept_offer)
+  ;; case still takes pool_inner_puzhash because it actually computes the pool's
+  ;; full puzzle hash from it.
   (defun spend_deposit_to_pool (SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE POOL_SINGLETON_MOD_HASH
                                 POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                 my_id my_inner_puzzlehash my_amount
-                                deed_launcher_id pool_inner_puzhash current_timestamp signature_data)
+                                deed_launcher_id current_timestamp signature_data)
     (assert
       (is-size-b32 deed_launcher_id)
-      (is-size-b32 pool_inner_puzhash)
       (is-uint64 current_timestamp)
       (c
         (authenticate_spend_oi AUTH_TYPE OWNER_PUBKEY SPEND_DEPOSIT_TO_POOL deed_launcher_id my_id signature_data)
@@ -257,13 +262,14 @@
   ;; because the announcement hash commits to both p2_vault_coin_id and the deed parameters.
   ;; SECURITY: p2_vault_coin_id must not equal my_id — the vault cannot assert its own announcement.
   ;; Both sides must be in the same block — atomic co-spend.
+  ;; LOW-13 fix (2026-04-26): removed dead `pool_inner_puzhash` parameter
+  ;; — see the same fix on spend_deposit_to_pool above for rationale.
   (defun spend_receive_from_pool (SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE POOL_SINGLETON_MOD_HASH
                                   POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                   my_id my_inner_puzzlehash my_amount
-                                  deed_launcher_id pool_inner_puzhash p2_vault_coin_id current_timestamp signature_data)
+                                  deed_launcher_id p2_vault_coin_id current_timestamp signature_data)
     (assert
       (is-size-b32 deed_launcher_id)
-      (is-size-b32 pool_inner_puzhash)
       (is-size-b32 p2_vault_coin_id)
       ;; SECURITY: p2_vault_coin_id must be a *different* coin from this vault coin
       (not (= p2_vault_coin_id my_id))
@@ -379,10 +385,28 @@
     )
   )
 
+  ;; LOW-11 + LOW-12 fix (2026-04-26):
+  ;;   - Add new_auth_type parameter so users can MIGRATE between BLS, secp256r1,
+  ;;     and secp256k1 keys.  Pre-fix, the curried AUTH_TYPE was reused on key
+  ;;     rotation, freezing the auth type for the lifetime of the vault.
+  ;;   - Validate new_auth_type ∈ {AUTH_TYPE_BLS, AUTH_TYPE_SECP256R1, AUTH_TYPE_SECP256K1}.
+  ;;   - Validate new_owner_pubkey size matches new_auth_type:
+  ;;       BLS         (1) → 48 bytes (G1Element)
+  ;;       secp256r1   (2) → 65 bytes (uncompressed 0x04 || X || Y)
+  ;;       secp256k1   (3) → 33 bytes (compressed)
+  ;;     Pre-fix, an owner could self-DoS by rotating to a wrong-size key.
+  ;;   - Bind new_auth_type into the BLS-signed message so the signer commits
+  ;;     to which auth type they are rotating to (defence-in-depth — without
+  ;;     this, the signer would only authorize the new pubkey, not the curve).
+  ;;
+  ;; Note: BLS-only authentication on the CURRENT key is preserved.  Secp
+  ;; rotation (signing 'k' with secp256k1 / secp256r1) requires a distinct
+  ;; EIP-712 typehash that covers (new_owner_pubkey, new_auth_type,
+  ;; new_merkle_root) and is deferred to the CRIT-2 extension.
   (defun spend_update_keys (SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE MEMBERS_MERKLE_ROOT
                             POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                             my_id my_inner_puzzlehash my_amount
-                            vault_inner_mod_hash new_owner_pubkey new_merkle_root member_proof current_timestamp signature_data)
+                            vault_inner_mod_hash new_owner_pubkey new_auth_type new_merkle_root member_proof current_timestamp signature_data)
     (assert
       ;; vault_inner_mod_hash must be a valid 32-byte atom
       (is-size-b32 vault_inner_mod_hash)
@@ -396,8 +420,16 @@
           POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH))
       ;; new_merkle_root must be a valid 32-byte hash
       (is-size-b32 new_merkle_root)
-      ;; new_owner_pubkey must be non-empty
-      new_owner_pubkey
+      ;; LOW-11: new_auth_type must be one of the three supported curves.
+      (any (= new_auth_type AUTH_TYPE_BLS)
+           (= new_auth_type AUTH_TYPE_SECP256R1)
+           (= new_auth_type AUTH_TYPE_SECP256K1))
+      ;; LOW-12: new_owner_pubkey size must match new_auth_type.
+      (if (= new_auth_type AUTH_TYPE_BLS)
+          (= (strlen new_owner_pubkey) 48)
+          (if (= new_auth_type AUTH_TYPE_SECP256R1)
+              (= (strlen new_owner_pubkey) 65)
+              (= (strlen new_owner_pubkey) 33)))
       (is-uint64 current_timestamp)
       ;; SECURITY: verify OWNER_PUBKEY is a member of the current MEMBERS_MERKLE_ROOT
       ;; before accepting any key rotation.  Prevents a third party from rotating keys
@@ -405,19 +437,21 @@
       (= MEMBERS_MERKLE_ROOT (simplify_merkle_proof OWNER_PUBKEY member_proof))
       (c
         ;; Authenticate with the CURRENT key — rotation is only valid if you own the current key.
+        ;; LOW-11: bind new_auth_type into the signed payload so the signer commits to it.
         ;; HIGH-5 partial: include my_id in the BLS message.  Secp support for 'k' requires
-        ;; a distinct EIP-712 typehash that covers (new_owner_pubkey, new_merkle_root);
-        ;; deferred to CRIT-2 extension.  authenticate_spend_bls_only raises if a secp
-        ;; AUTH_TYPE is attempted.
+        ;; a distinct EIP-712 typehash that covers (new_owner_pubkey, new_auth_type,
+        ;; new_merkle_root); deferred to CRIT-2 extension.  authenticate_spend_bls_only
+        ;; raises if a secp AUTH_TYPE is attempted.
         (authenticate_spend_bls_only AUTH_TYPE OWNER_PUBKEY
-          (sha256tree (list SPEND_UPDATE_KEYS new_owner_pubkey new_merkle_root my_id)))
+          (sha256tree (list SPEND_UPDATE_KEYS new_owner_pubkey new_auth_type new_merkle_root my_id)))
         (c
-          ;; Re-create singleton at the correctly-computed new inner puzzle hash.
+          ;; LOW-11: Re-create singleton at new_auth_type (NOT the current AUTH_TYPE),
+          ;; so users can migrate between curve families.
           ;; This uses curry_hashes, NOT a sha256 shortcut — see inner_puzzle_hash_for_updated_keys.
           (list CREATE_COIN
             (inner_puzzle_hash_for_updated_keys
               SINGLETON_STRUCT vault_inner_mod_hash
-              new_owner_pubkey AUTH_TYPE new_merkle_root
+              new_owner_pubkey new_auth_type new_merkle_root
               POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH)
             my_amount
             (list my_inner_puzzlehash))
@@ -435,10 +469,11 @@
 
   ;; Main dispatch — validate common inputs, then route.
   ;; p layout per spend case:
-  ;;   'o'  (deed_launcher_id pool_inner_puzhash current_timestamp signature_data)
-  ;;   'i'  (deed_launcher_id pool_inner_puzhash p2_vault_coin_id current_timestamp signature_data)
-  ;;   'a'  (deed_launcher_id token_amount pool_inner_puzhash current_timestamp signature_data)
-  ;;   'k'  (new_owner_pubkey new_merkle_root member_proof current_timestamp signature_data)
+  ;;   'o'  (deed_launcher_id current_timestamp signature_data)                                  — LOW-13: dropped dead pool_inner_puzhash
+  ;;   'i'  (deed_launcher_id p2_vault_coin_id current_timestamp signature_data)                 — LOW-13: dropped dead pool_inner_puzhash
+  ;;   'a'  (deed_launcher_id token_amount pool_inner_puzhash current_timestamp signature_data)  — 'a' actually uses pool_inner_puzhash
+  ;;   'k'  (vault_inner_mod_hash new_owner_pubkey new_auth_type new_merkle_root member_proof current_timestamp signature_data)
+  ;;        — LOW-11 fix added new_auth_type to allow BLS↔secp migration on rotation.
   ;; For BLS (AUTH_TYPE 1): signature_data may be nil — AGG_SIG_ME is enforced by the network.
   ;; For secp256k1 (AUTH_TYPE 3): signature_data must be the 64-byte compact EIP-712 signature.
   ;;
@@ -450,25 +485,30 @@
     ;; and could cause lineage proof confusion in downstream puzzles.
     (> my_amount 0)
     (if (= spend_case SPEND_DEPOSIT_TO_POOL)
+      ;; LOW-13: 'o' solution shape now has 3 fields instead of 4.
       (spend_deposit_to_pool SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE POOL_SINGLETON_MOD_HASH
                              POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                              my_id my_inner_puzzlehash my_amount
-                             (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))))
+                             (f p) (f (r p)) (f (r (r p))))
       (if (= spend_case SPEND_RECEIVE_FROM_POOL)
+        ;; LOW-13: 'i' solution shape now has 4 fields instead of 5.
         (spend_receive_from_pool SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE POOL_SINGLETON_MOD_HASH
                                  POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                  my_id my_inner_puzzlehash my_amount
-                                 (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))))
+                                 (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))))
         (if (= spend_case SPEND_ACCEPT_OFFER)
           (spend_accept_offer SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE POOL_SINGLETON_MOD_HASH
                               POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                               my_id my_inner_puzzlehash my_amount
                               (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))))
           (if (= spend_case SPEND_UPDATE_KEYS)
+            ;; LOW-11 fix: 'k' solution shape is now 7 fields:
+            ;;   vault_inner_mod_hash, new_owner_pubkey, new_auth_type,
+            ;;   new_merkle_root, member_proof, current_timestamp, signature_data
             (spend_update_keys SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE MEMBERS_MERKLE_ROOT
                                POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                my_id my_inner_puzzlehash my_amount
-                               (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))) (f (r (r (r (r (r p)))))))
+                               (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))) (f (r (r (r (r (r p)))))) (f (r (r (r (r (r (r p))))))))
             (x) ;; unknown spend case
           )
         )
