@@ -1,6 +1,5 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; p2_deed_settlement — Settlement offer leaf puzzle for batch settlement.
-;;; Analogous to Solslot's p2_nft_burn_or_delayed.
 ;;;
 ;;; Each p2_deed_settlement coin is a leaf of the splitxch distribution tree,
 ;;; created when the pool batch-settles a collection of deeds.  It holds an

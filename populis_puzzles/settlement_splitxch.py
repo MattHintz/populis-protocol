@@ -1,10 +1,10 @@
 """
 settlement_splitxch.py — Compute equal-split settlement distribution tree.
 
-Analogous to Solslot's secure_the_bag.py.  Given a total settlement amount
-and a list of deed launcher IDs, builds a binary tree of "quote puzzles"
-(puzzles that just output CREATE_COIN conditions) whose leaves are
-p2_deed_settlement coins — one per deed, each holding an equal share.
+Given a total settlement amount and a list of deed launcher IDs, builds
+a binary tree of "quote puzzles" (puzzles that just output CREATE_COIN
+conditions) whose leaves are p2_deed_settlement coins — one per deed,
+each holding an equal share.
 
 Usage (simulation / driver):
     from populis_puzzles.settlement_splitxch import (
@@ -59,7 +59,7 @@ class TargetCoin:
     amount: uint64
 
 
-# Fees spend asserts this (matches Solslot convention)
+# Fees spend asserts this announcement to atomically tie payment to the tree.
 EMPTY_COIN_ANNOUNCEMENT = [ConditionOpcode.CREATE_COIN_ANNOUNCEMENT, b"$"]
 
 
@@ -106,7 +106,7 @@ def compute_settlement_targets(
 
 
 # ---------------------------------------------------------------------------
-# build_splitxch_tree — recursive binary split (secure_the_bag pattern)
+# build_splitxch_tree — recursive binary split into a CREATE_COIN tree
 # ---------------------------------------------------------------------------
 def build_splitxch_tree(
     targets: List[SettlementTarget],

@@ -2,7 +2,7 @@
 ;;; The p2 singleton puzzle for the pool
 ;;; Holds a Smart Deed NFT on behalf of the pool singleton.
 ;;; May be spent anytime authorized by the pool singleton inner puzzle.
-;;; Modeled on Solslot p2_vault.clsp, adapted for pool escrow.
+;;; Pattern: pay-to-singleton escrow via ASSERT_PUZZLE_ANNOUNCEMENT.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (mod

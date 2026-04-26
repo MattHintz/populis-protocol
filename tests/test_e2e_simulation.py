@@ -28,10 +28,10 @@ Full lifecycle covered:
   Phase 8 — State verification: TVL, deed count, pool puzzle hash
   Phase 9 — Batch Settlement: governance approves splitxch distribution →
              pool creates splitxch root coin + per-deed release announcements →
-             p2_pool releases deeds.  Equal split via secure_the_bag pattern.
+             p2_pool releases deeds.  Equal split via the splitxch tree.
              Pool state → (POOL_ACTIVE, 0, 0).
 
-Modelled after Solslot's escrow simulation pattern.
+A full end-to-end exercise of every spend case in every contract.
 """
 import hashlib
 
@@ -858,7 +858,7 @@ class TestPhase8Settlement:
     """Batch settlement: governance approves splitxch root → pool creates
     distribution tree + per-deed release announcements → pool state (0,0).
 
-    Uses secure_the_bag pattern (equal split).  Deeds exit via p2_pool
+    Uses an equal-split distribution tree.  Deeds exit via p2_pool
     (pool creates release announcements), not via smart_deed_inner.
     """
 

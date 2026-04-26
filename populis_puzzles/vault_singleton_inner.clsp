@@ -355,8 +355,8 @@
   ;;   3. Validates vault_inner_mod_hash by asserting curry_hashes(vault_inner_mod_hash, ...) == my_inner_puzzlehash.
   ;;      This avoids the circular-dependency of defconstant (a puzzle cannot know its own mod hash at compile
   ;;      time) while still rejecting any tampered mod hash at runtime.
-  ;;   4. Recomputes the new inner puzzle hash via curry_hashes — not a sha256 shortcut.
-  ;;      This is the fix for the solslot stub: puzzle_hash_for_updated_members must be exact.
+  ;;   4. Recomputes the new inner puzzle hash via curry_hashes — the exact tree-hash result,
+  ;;      not a sha256 shortcut over the concatenated arguments.
   ;;   5. Emits CREATE_COIN to the correctly-derived new inner puzzle hash.
   ;;
   ;; p layout: (vault_inner_mod_hash new_owner_pubkey new_merkle_root member_proof current_timestamp signature_data)

@@ -183,7 +183,6 @@ Puzzle integrity is verified on import via SHA256 checksum of all compiled `.cls
 ## Influences
 
 - **[Chia Network](https://github.com/Chia-Network/chia-blockchain)** — Coin-set model, Chialisp, CATs, singletons, CHIP-25
-- **[Solslot](https://github.com/solslot)** — Vault singletons, secure-the-bag settlement pattern, p2_nft_burn_or_delayed leaf puzzles
 
 ---
 
