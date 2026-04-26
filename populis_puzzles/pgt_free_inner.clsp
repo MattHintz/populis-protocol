@@ -62,17 +62,35 @@
     ;; parameter — this dialect of Chialisp does not give regular defuns
     ;; access to the mod environment, so passing them through is mandatory.
 
-    ;; Reject any condition that could spoof governance traffic:
+    ;; Reject any condition that could spoof governance traffic.  Inner
+    ;; puzzles authorize ownership transitions only — all protocol-level
+    ;; messaging and announcements are emitted by the PGT wrapper itself.
+    ;;
     ;;   - REMARK whose first arg is PROTOCOL_PREFIX  (governance REMARKs)
-    ;;   - any SEND_MESSAGE or RECEIVE_MESSAGE        (all messaging is the
-    ;;     PGT wrapper's responsibility; inner puzzles must never emit them)
+    ;;   - any SEND_MESSAGE or RECEIVE_MESSAGE        (wrapper-only)
+    ;;   - any CREATE_PUZZLE_ANNOUNCEMENT             (wrapper-only)  *POP-CANON-001*
+    ;;   - any CREATE_COIN_ANNOUNCEMENT               (wrapper-only)  *POP-CANON-001*
+    ;;
+    ;; POP-CANON-001 background: prior versions filtered only REMARK +
+    ;; SEND/RECEIVE_MESSAGE.  An attacker could spend a PGT in TRANSFER
+    ;; mode, emit one valid CREATE_COIN (so PGT remained free), AND
+    ;; emit a forged CREATE_PUZZLE_ANNOUNCEMENT carrying the protocol
+    ;; LOCK announcement — the proposal tracker would accept the
+    ;; spoofed announcement as PGT vote weight, defeating CRITICAL-3's
+    ;; PGT-CAT conservation invariant.  The fix bans inner-emitted
+    ;; CREATE_*_ANNOUNCEMENT entirely; the wrapper retains exclusive
+    ;; authority to emit the LOCK announcement (only in LOCK mode).
+    ;;
     ;; PROTOCOL_PREFIX is a defconstant from utility_macros.clib (a literal).
     (defun-inline check_no_protocol_prefix_abuse (cond_code cond_body)
         (if (= cond_code REMARK)
             (if (= (f cond_body) PROTOCOL_PREFIX) (x) 1)
             (if (any (= cond_code SEND_MESSAGE) (= cond_code RECEIVE_MESSAGE))
                 (x)
-                1))
+                (if (any (= cond_code CREATE_PUZZLE_ANNOUNCEMENT)
+                         (= cond_code CREATE_COIN_ANNOUNCEMENT))
+                    (x)
+                    1)))
     )
 
     ;; Compute the puzzle hash of pgt_free_inner curried with a given owner.

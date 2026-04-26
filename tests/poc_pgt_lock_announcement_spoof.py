@@ -1,16 +1,24 @@
 """PoC: PGT TRANSFER mode can spoof a governance LOCK announcement.
 
+Audit reference: ``research/CANON_CHIA_PROJECT_AUDIT_2026_04_26.md`` (POP-CANON-001).
+
 Run:
     PYTHONPATH=. .venv/bin/python tests/poc_pgt_lock_announcement_spoof.py
 
-Expected vulnerable output:
+Pre-fix vulnerable output:
     forged_lock_announcement_present=True
     create_coin_count=1
+    STATUS: VULNERABLE — attack succeeded (PGT remained free; tracker would
+            accept the forged LOCK announcement as voting weight).
 
-The proposal tracker treats a PGT LOCK announcement as proof that governance
-weight was committed. This PoC shows a PGT free coin can emit that same
-announcement while spending in TRANSFER mode, so the PGT remains free instead
-of moving into pgt_locked_inner.
+Post-fix output (current):
+    STATUS: FIXED — attack rejected by check_no_protocol_prefix_abuse.
+    The PGT wrapper now forbids inner puzzles from emitting any
+    CREATE_PUZZLE_ANNOUNCEMENT or CREATE_COIN_ANNOUNCEMENT.
+
+Regression tests covering the fix:
+    ``tests/test_pop_canon_001.py`` (7 tests pinning all attack variants
+    plus the legitimate-LOCK happy path).
 """
 from __future__ import annotations
 
@@ -74,21 +82,38 @@ def main() -> None:
         tracker_struct,
         bytes32(malicious_inner.get_tree_hash()),
     )
-    out = pgt_free.run(Program.to([PGT_TRANSFER, malicious_inner, 0, 0])).as_python()
-
-    forged_lock = any(
-        c[0] == bytes([CREATE_PUZZLE_ANNOUNCEMENT]) and c[1] == lock_content
-        for c in out
-    )
-    create_coin_count = sum(1 for c in out if c[0] == bytes([CREATE_COIN]))
 
     print("PGT LOCK announcement spoof PoC")
     print("-" * 72)
     print(f"pgt_free_mod_hash={pgt_free_mod_hash.hex()}")
     print(f"proposal_hash={proposal_hash.hex()}")
     print(f"lock_content={lock_content.hex()}")
+    print()
+
+    try:
+        out = pgt_free.run(
+            Program.to([PGT_TRANSFER, malicious_inner, 0, 0])
+        ).as_python()
+    except Exception as e:
+        # Post-fix: the filter raises (x).  Attack rejected.
+        print("STATUS: FIXED — attack rejected by check_no_protocol_prefix_abuse.")
+        print(f"        CLVM error: {type(e).__name__}: {e}")
+        print()
+        print("Regression tests: tests/test_pop_canon_001.py")
+        return
+
+    # Pre-fix path: the run succeeded, attack went through.
+    forged_lock = any(
+        c[0] == bytes([CREATE_PUZZLE_ANNOUNCEMENT]) and c[1] == lock_content
+        for c in out
+    )
+    create_coin_count = sum(1 for c in out if c[0] == bytes([CREATE_COIN]))
+
     print(f"forged_lock_announcement_present={forged_lock}")
     print(f"create_coin_count={create_coin_count}")
+    print()
+    if forged_lock and create_coin_count == 1:
+        print("STATUS: VULNERABLE — attack succeeded (PGT remained free).")
     print()
     print("Emitted conditions:")
     for condition in out:
