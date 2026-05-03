@@ -121,6 +121,19 @@ def make_inner_puzzle(
             raise ValueError(
                 f"allowlist[{i}] must be 48-byte BLS G1 pubkey, got {len(pk)} bytes"
             )
+    # POP-CANON-017 preflight: reject duplicate pubkeys before the on-chain
+    # `has-no-duplicates` guard would refuse the spend.  Fails fast and gives
+    # a friendlier error (the on-chain failure is just a generic CLVM raise).
+    seen: set[bytes] = set()
+    for i, pk in enumerate(allowlist):
+        if bytes(pk) in seen:
+            raise ValueError(
+                f"allowlist contains duplicate pubkey at index {i}: "
+                f"{bytes(pk).hex()[:16]}… "
+                f"— a duplicate would dilute the effective quorum below "
+                f"the cardinality you appear to be committing to."
+            )
+        seen.add(bytes(pk))
     return admin_authority_inner_mod().curry(
         admin_authority_inner_mod_hash(),
         list(allowlist),
@@ -314,6 +327,17 @@ def build_rotation_spend(
                 f"new_allowlist[{i}] must be 48-byte BLS G1 pubkey, "
                 f"got {len(pk)} bytes"
             )
+    # POP-CANON-017 preflight (matches `has-no-duplicates` on-chain guard).
+    seen: set[bytes] = set()
+    for i, pk in enumerate(new_allowlist):
+        if bytes(pk) in seen:
+            raise ValueError(
+                f"new_allowlist contains duplicate pubkey at index {i}: "
+                f"{bytes(pk).hex()[:16]}… "
+                f"— a duplicate would dilute the effective quorum below "
+                f"the cardinality you appear to be committing to."
+            )
+        seen.add(bytes(pk))
 
     if len(signer_indices) < current.quorum_m:
         raise ValueError(

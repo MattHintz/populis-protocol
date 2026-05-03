@@ -171,6 +171,12 @@
     (is-uint64 new_state_version)
     (is-uint64 PROPOSAL_STATE)
     (is-uint64 STATE_VERSION)
+    ;; BLS G1 pubkey size guard (POP-CANON-018).  Without this, a
+    ;; misconfigured curry of a 32- or 64-byte atom would make every
+    ;; AGG_SIG_ME below unsatisfiable, bricking the proposal's lineage
+    ;; on the very first transition attempt.
+    (is-size-bls-g1 OWNER_PUBKEY)
+    (is-size-bls-g1 GOV_PUBKEY)
     ;; Replay protection: monotonic version.
     (> new_state_version STATE_VERSION)
     ;; The current state must be DRAFT for any V1 transition.  V2

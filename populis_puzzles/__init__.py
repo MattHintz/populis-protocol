@@ -54,11 +54,17 @@ PUZZLE_FILENAMES = (
 # ── Frozen checksum — update after every intentional puzzle change ──
 # Set to None to skip verification (development mode).
 # Generate with: python -c "from populis_puzzles import compute_puzzles_checksum; print(compute_puzzles_checksum())"
-# Refrozen after the A.1..A.4 on-chain-migration series landed; covers
-# all of the canonical puzzle set including protocol_config_inner,
-# admin_authority_inner, property_registry_inner, mint_proposal_inner.
+# Refrozen after the POP-CANON-017 + POP-CANON-018 hardening landed:
+#   - admin_authority_inner: added all-bls-g1-pubkeys + has-no-duplicates
+#     guards against ALLOWLIST and new_allowlist.
+#   - mint_proposal_inner: added is-size-bls-g1 guards on OWNER_PUBKEY
+#     and GOV_PUBKEY.
+#   - protocol_config_inner: added is-size-bls-g1 guard on GOV_PUBKEY.
+#   - property_registry_inner: added is-size-bls-g1 guard on GOV_PUBKEY.
+# All four A.x puzzles' mod hashes therefore changed; the new values
+# are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
-    "ade1495f4efb3871c783766ced7c011428f4009d2ef401ff0a9f525331ba6447"
+    "7ce368da0ff71b27faa22c0bf8eaf639823ea68f47608dcbd574a13584219e78"
 )
 
 # ── Cache ──

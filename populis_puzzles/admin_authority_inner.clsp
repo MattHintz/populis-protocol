@@ -165,6 +165,20 @@
     ;; Curried sanity (defence-in-depth — operator-set values).
     (is-uint64 QUORUM_M)
     (is-uint64 AUTHORITY_VERSION)
+    ;; ── BLS G1 pubkey size guard (POP-CANON-018) ─────────────────────
+    ;; Every entry of ALLOWLIST and new_allowlist must be a 48-byte
+    ;; compressed G1 point.  Without this check, AGG_SIG_ME below would
+    ;; emit against a malformed atom and consensus would fail at the
+    ;; first spend, bricking the singleton lineage.
+    (all-bls-g1-pubkeys ALLOWLIST)
+    (all-bls-g1-pubkeys new_allowlist)
+    ;; ── No-duplicate guard on new_allowlist (POP-CANON-017) ──────────
+    ;; Reject [X, X, Y] et al — duplicate pubkeys would dilute the
+    ;; effective quorum below the cardinality the operator believes
+    ;; they're committing to.  Also applied to ALLOWLIST defensively
+    ;; in case the launch state itself was malformed.
+    (has-no-duplicates ALLOWLIST ())
+    (has-no-duplicates new_allowlist ())
     ;; Replay protection — version must STRICTLY increase.
     (> new_authority_version AUTHORITY_VERSION)
     ;; New quorum bounds: 1 ≤ new_quorum_m ≤ len(new_allowlist).

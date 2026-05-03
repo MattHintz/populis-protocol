@@ -137,8 +137,12 @@
     (is-uint64 new_config_version)
     ;; Curried sanity (defence-in-depth — these are operator-set, but a
     ;; misconfigured launch would be caught by the very first spend).
-    ;; GOV_PUBKEY is 48 bytes (BLS G1) so we don't size-check it here;
-    ;; AGG_SIG_ME below will reject non-G1 pubkeys at consensus time.
+    ;; BLS G1 pubkey size guard (POP-CANON-018) — previously this
+    ;; comment claimed AGG_SIG_ME would catch malformed pubkeys at
+    ;; consensus.  That's true but the failure mode is "permanent
+    ;; brick on first spend"; hard-failing here surfaces the
+    ;; misconfig at deploy-time instead.
+    (is-size-bls-g1 GOV_PUBKEY)
     (is-size-b32 POOL_LAUNCHER_ID)
     (is-size-b32 GOV_TRACKER_LAUNCHER_ID)
     (is-size-b32 NETWORK_ID)
