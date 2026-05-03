@@ -43,6 +43,13 @@ PUZZLE_FILENAMES = (
     # A.2 — admin_authority singleton, replaces POPULIS_ADMIN_PUBKEY_ALLOWLIST
     # + JWT secret with m-of-n quorum on-chain rotation.
     "admin_authority_inner.clsp",
+    # A.2 v2 — MIPS-based admin_authority. Per-admin OneOfN bundles let admins
+    # mix BLS / EIP-712 / passkey / etc. in the same quorum, and add/remove
+    # auth methods over time with cooldown-based defence-in-depth. See
+    # research/POPULIS_ADMIN_AUTHORITY_V2_DESIGN.md. Currently implements the
+    # SKELETON + OPERATIONAL spend (tag 0x01); KEY_ADD_* / KEY_REMOVE_* land
+    # in C.2b/C.2c.
+    "admin_authority_v2_inner.clsp",
     # A.4 — property_registry singleton; append-only on-chain log of
     # registered property ids, paired with the A.1 mint_proposal singleton.
     "property_registry_inner.clsp",
@@ -64,7 +71,16 @@ PUZZLE_FILENAMES = (
 # All four A.x puzzles' mod hashes therefore changed; the new values
 # are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
-    "da47e662810e029bc345edbdb31905c3fb78a6410a33f274e01126fc502ab15f"
+    # 2026-05-03: critical bugfix to admin_authority_v2_inner.clsp
+    # (Phase 9-Hermes-C.3 step 1). All handler functions converted from
+    # defun to defun-inline. Plain defun creates an isolated scope; the
+    # handlers' references to curried mod params (MIPS_ROOT_HASH,
+    # ADMINS_HASH, ...) silently resolved to nil, which made every
+    # check fail. defun-inline expands macro-style at the call site,
+    # preserving access to the outer mod's environment. The first
+    # OPERATIONAL runtime test (test_admin_authority_v2.py) now passes.
+    # Bytecode grew from 8069 -> 9694 bytes due to inlining.
+    "1794f2c2241e357d583cbf78d6449269fe2ba36377cdb73689dc252d60d5b0be"
 )
 
 # ── Cache ──

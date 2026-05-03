@@ -1,0 +1,24 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Test fixture: minimal BLS-style member puzzle.
+;;;
+;;; Emits a real AGG_SIG_ME condition that consensus would actually
+;;; validate against the spend bundle's signatures. Used only by
+;;; tests/test_admin_authority_v2.py to exercise the v2 shim with
+;;; non-trivial member reveals (not just REMARK-emitting constants).
+;;;
+;;; NOT part of PUZZLE_FILENAMES — this is a test fixture, not a
+;;; production puzzle. The production BLS member is the chia-wallet-sdk
+;;; BlsMember (which has full MIPS-compatible coin-id assertions and
+;;; restrictions support); this fixture is a strict subset that exists
+;;; solely to verify the v2 shim's `(a member_reveal member_solution)`
+;;; machinery handles real signature conditions.
+;;;
+;;; Curried: PUBKEY (48-byte BLS G1 pubkey)
+;;; Solution: message (the payload to be signed)
+;;; Emits:    ((AGG_SIG_ME PUBKEY message))
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(mod (PUBKEY message)
+  (include condition_codes.clib)
+  (list (list AGG_SIG_ME PUBKEY message))
+)
