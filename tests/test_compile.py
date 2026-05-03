@@ -123,3 +123,21 @@ class TestCompile:
         )
         assert mod is not None
         assert mod.get_tree_hash() is not None
+
+    def test_property_registry_inner(self):
+        mod: Program = load_clvm(
+            "property_registry_inner.clsp",
+            package_or_requirement="populis_puzzles",
+            recompile=True,
+        )
+        assert mod is not None
+        assert mod.get_tree_hash() is not None
+
+    def test_mint_proposal_inner(self):
+        mod: Program = load_clvm(
+            "mint_proposal_inner.clsp",
+            package_or_requirement="populis_puzzles",
+            recompile=True,
+        )
+        assert mod is not None
+        assert mod.get_tree_hash() is not None

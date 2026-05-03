@@ -43,14 +43,23 @@ PUZZLE_FILENAMES = (
     # A.2 — admin_authority singleton, replaces POPULIS_ADMIN_PUBKEY_ALLOWLIST
     # + JWT secret with m-of-n quorum on-chain rotation.
     "admin_authority_inner.clsp",
+    # A.4 — property_registry singleton; append-only on-chain log of
+    # registered property ids, paired with the A.1 mint_proposal singleton.
+    "property_registry_inner.clsp",
+    # A.1 — mint_proposal singleton; per-proposal state machine
+    # (DRAFT → APPROVED → CANCELLED) replacing MintProposalStore.
+    "mint_proposal_inner.clsp",
 )
 
 # ── Frozen checksum — update after every intentional puzzle change ──
 # Set to None to skip verification (development mode).
 # Generate with: python -c "from populis_puzzles import compute_puzzles_checksum; print(compute_puzzles_checksum())"
-# Set to None during the on-chain-migration series (A.1..A.4); will be
-# refrozen after A.1+A.4 land so the full puzzle set is locked.
-FROZEN_CHECKSUM: Optional[str] = None
+# Refrozen after the A.1..A.4 on-chain-migration series landed; covers
+# all of the canonical puzzle set including protocol_config_inner,
+# admin_authority_inner, property_registry_inner, mint_proposal_inner.
+FROZEN_CHECKSUM: Optional[str] = (
+    "ade1495f4efb3871c783766ced7c011428f4009d2ef401ff0a9f525331ba6447"
+)
 
 # ── Cache ──
 _puzzle_cache: Dict[str, Program] = {}
