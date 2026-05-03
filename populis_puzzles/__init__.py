@@ -38,12 +38,16 @@ PUZZLE_FILENAMES = (
     "pgt_tail.clsp",
     "pgt_free_inner.clsp",
     "pgt_locked_inner.clsp",
+    # A.3 — protocol_config singleton, replaces 3 off-chain env-var trust roots.
+    "protocol_config_inner.clsp",
 )
 
 # ── Frozen checksum — update after every intentional puzzle change ──
 # Set to None to skip verification (development mode).
 # Generate with: python -c "from populis_puzzles import compute_puzzles_checksum; print(compute_puzzles_checksum())"
-FROZEN_CHECKSUM: Optional[str] = "05ae4a9c80f86d529124e1aa6aeedbeb874eaa8f81d396101325092b662514b9"
+# Set to None during the on-chain-migration series (A.1..A.4); will be
+# refrozen after A.1+A.4 land so the full puzzle set is locked.
+FROZEN_CHECKSUM: Optional[str] = None
 
 # ── Cache ──
 _puzzle_cache: Dict[str, Program] = {}
