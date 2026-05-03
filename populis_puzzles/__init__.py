@@ -64,7 +64,7 @@ PUZZLE_FILENAMES = (
 # All four A.x puzzles' mod hashes therefore changed; the new values
 # are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
-    "c9b5741f1c729c0d1c08b51443c22fee907b27d466a83a773918bfbc253f14a8"
+    "da47e662810e029bc345edbdb31905c3fb78a6410a33f274e01126fc502ab15f"
 )
 
 # ── Cache ──

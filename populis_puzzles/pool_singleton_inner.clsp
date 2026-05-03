@@ -338,16 +338,39 @@
                                               (compute_token_amount deed_par_value FP_SCALE)
                                               (list PROTOCOL_DID_PUZHASH)))))))
                     (c
-                        ;; Tell deed to release to buyer's p2_vault (vault containment)
-                        (list SEND_MESSAGE 0x10
-                            (concat PROTOCOL_PREFIX (sha256tree (list POOL_SPEND_REDEEM deed_id
-                                (curry_hashes P2_VAULT_MOD_HASH
-                                    (sha256 1 (f SINGLETON_STRUCT))
-                                    (sha256 1 buyer_vault_launcher_id)
-                                    (sha256 1 launcher_puzzle_hash))))))
+                        ;; ── POP-CANON-020: cross-coin announcement pairing ────
+                        ;; vault_singleton_inner.clsp::spend_accept_offer asserts a
+                        ;; CREATE_PUZZLE_ANNOUNCEMENT from THIS coin with body
+                        ;;
+                        ;;   PROTOCOL_PREFIX || sha256tree(list
+                        ;;       POOL_SPEND_GENERATE_OFFER
+                        ;;       deed_launcher_id
+                        ;;       token_amount)
+                        ;;
+                        ;; before the buyer's vault will accept the deed.  Without
+                        ;; this emission, the vault-mediated secondary purchase
+                        ;; bundle fails atomically at consensus (the vault's
+                        ;; ASSERT_PUZZLE_ANNOUNCEMENT has no matching emission).
+                        ;; The vault's `deed_launcher_id` and `token_amount` map
+                        ;; to the pool's `deed_id` and `(compute_token_amount
+                        ;; deed_par_value FP_SCALE)` respectively.
+                        (list CREATE_PUZZLE_ANNOUNCEMENT
+                            (concat PROTOCOL_PREFIX
+                                (sha256tree (list POOL_SPEND_GENERATE_OFFER
+                                                  deed_id
+                                                  (compute_token_amount deed_par_value FP_SCALE)))))
                         (c
-                            (list REMARK PROTOCOL_PREFIX POOL_STATUS (- TOTAL_VALUE_LOCKED deed_par_value) (- DEED_COUNT 1))
-                            (identity_conditions SINGLETON_STRUCT my_id my_inner_puzzlehash my_amount)
+                            ;; Tell deed to release to buyer's p2_vault (vault containment)
+                            (list SEND_MESSAGE 0x10
+                                (concat PROTOCOL_PREFIX (sha256tree (list POOL_SPEND_REDEEM deed_id
+                                    (curry_hashes P2_VAULT_MOD_HASH
+                                        (sha256 1 (f SINGLETON_STRUCT))
+                                        (sha256 1 buyer_vault_launcher_id)
+                                        (sha256 1 launcher_puzzle_hash))))))
+                            (c
+                                (list REMARK PROTOCOL_PREFIX POOL_STATUS (- TOTAL_VALUE_LOCKED deed_par_value) (- DEED_COUNT 1))
+                                (identity_conditions SINGLETON_STRUCT my_id my_inner_puzzlehash my_amount)
+                            )
                         )
                     )
                 )

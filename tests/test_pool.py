@@ -213,19 +213,26 @@ class TestPoolGenerateOffer:
         result = curried.run(sol)
         conditions = result.as_python()
 
-        # 7 conditions: CREATE_COIN, ASSERT_PUZZLE_ANNOUNCEMENT, SEND_MESSAGE,
-        #               REMARK, ASSERT_MY_COIN_ID, ASSERT_MY_AMOUNT, ASSERT_MY_PUZZLEHASH
-        assert len(conditions) == 7
+        # 8 conditions: CREATE_COIN, ASSERT_PUZZLE_ANNOUNCEMENT (CAT settlement),
+        #               CREATE_PUZZLE_ANNOUNCEMENT (POP-CANON-020 vault pairing),
+        #               SEND_MESSAGE, REMARK, ASSERT_MY_COIN_ID, ASSERT_MY_AMOUNT,
+        #               ASSERT_MY_PUZZLEHASH.
+        # The CREATE_PUZZLE_ANNOUNCEMENT was added by POP-CANON-020 to satisfy
+        # vault_singleton_inner.clsp::spend_accept_offer's matching ASSERT_PUZZLE_ANNOUNCEMENT.
+        assert len(conditions) == 8
         # CREATE_COIN (state recreation: deed leaves pool)
         assert conditions[0][0] == bytes([51])
         # ASSERT_PUZZLE_ANNOUNCEMENT (verify token payment via CAT settlement to protocol treasury)
         assert conditions[1][0] == bytes([63])  # ASSERT_PUZZLE_ANNOUNCEMENT
+        # CREATE_PUZZLE_ANNOUNCEMENT (POP-CANON-020: vault accept-offer pairing)
+        assert conditions[2][0] == bytes([62])  # CREATE_PUZZLE_ANNOUNCEMENT
+        assert conditions[2][1][:1] == PROTOCOL_PREFIX
         # SEND_MESSAGE 0x10 (tell deed to release to buyer)
-        assert conditions[2][0] == bytes([66])  # SEND_MESSAGE
-        assert conditions[2][1] == bytes([0x10])
-        assert conditions[2][2][:1] == PROTOCOL_PREFIX
+        assert conditions[3][0] == bytes([66])  # SEND_MESSAGE
+        assert conditions[3][1] == bytes([0x10])
+        assert conditions[3][2][:1] == PROTOCOL_PREFIX
         # REMARK
-        assert conditions[3][0] == bytes([1])
+        assert conditions[4][0] == bytes([1])
 
         # State recreation: deed leaves pool (tvl - par_value, count - 1)
         expected_new = curry_pool(pool_status=POOL_ACTIVE, tvl=0, deed_count=0)
