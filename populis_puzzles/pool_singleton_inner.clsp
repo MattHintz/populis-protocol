@@ -216,6 +216,26 @@
             (> DEED_COUNT 0)
             (> total_settlement_amount 0)
             (= (count_list deed_releases) DEED_COUNT)
+            ;; ── POP-CANON-019: reject duplicate deed_id in releases ───────
+            ;; Without this guard, a settlement orchestrator could submit
+            ;; deed_releases = [(D1, ph1), (D1, ph1), (D2, ph2)] for a
+            ;; 3-deed pool: length check passes, but the two D1 entries
+            ;; produce byte-identical CREATE_PUZZLE_ANNOUNCEMENT bodies,
+            ;; which Chia consensus deduplicates by announcement_id.
+            ;; D3 then has no matching announcement and is permanently
+            ;; stranded (DEED_COUNT resets to 0 and no future settlement
+            ;; can re-emit D3's release).  Governance signs only
+            ;; (splitxch_root, total, count) so a malicious orchestrator
+            ;; can mutate deed_releases post-approval without invalidating
+            ;; the gov AGG_SIG_ME.  This guard binds the on-chain
+            ;; settlement integrity to a deduplicated release-set.
+            ;;
+            ;; Future work (defence-in-depth): also have governance sign
+            ;; sha256tree(deed_releases) directly so any post-approval
+            ;; mutation fails AGG_SIG_ME verification.  That requires
+            ;; coordinated changes in governance_singleton_inner.clsp
+            ;; and is left for a follow-up commit.
+            (has-no-duplicate-firsts deed_releases ())
             (c
                 ;; State recreation: pool fully settled
                 (list CREATE_COIN

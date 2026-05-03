@@ -128,6 +128,26 @@
     )
   )
 
+  ;; Variant of `has-no-duplicates` for a list of pairs: compares only
+  ;; the FIRST element of each pair.  Used by pool_singleton_inner.clsp
+  ;; in `spend_settlement` to reject duplicate ``(deed_id . next_ph)``
+  ;; entries — an attacker who provides duplicate deed_ids would
+  ;; cause CREATE_PUZZLE_ANNOUNCEMENT byte-collisions, which Chia
+  ;; consensus deduplicates by announcement_id, silently stranding
+  ;; one deed per duplicate pair.  See
+  ;; CANON_POPULIS_TRANSPARENCY_SINGLETONS_2026_05_03.md POP-CANON-019.
+  ;;
+  ;; `seen` is the recursion accumulator; callers pass `()` initially.
+  (defun has-no-duplicate-firsts (lst seen)
+    (if lst
+      (if (atom-in-list (f (f lst)) seen)
+        ()
+        (has-no-duplicate-firsts (r lst) (c (f (f lst)) seen))
+      )
+      1
+    )
+  )
+
   ;; --- Protocol prefix for announcement namespacing ---
 
   (defconstant PROTOCOL_PREFIX 0x50)  ;; "P" for Populis
