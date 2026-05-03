@@ -39,7 +39,9 @@ This is what RWA infrastructure looks like when you take the "decentralized" par
               └────────────┘  └──────────────┘
 ```
 
-### Core Contracts (12 Chialisp puzzles)
+### Core Contracts (16 Chialisp puzzles)
+
+The original 12-contract protocol stack:
 
 | Contract | Role |
 |----------|------|
@@ -54,6 +56,17 @@ This is what RWA infrastructure looks like when you take the "decentralized" par
 | `mint_offer_delegate` | Eve deed inner — on-chain standing offer for primary purchase. |
 | `purchase_payment` | Ephemeral payment enforcer — atomic purchase in a single block. |
 | `p2_deed_settlement` | Settlement leaf puzzle — burn deed, receive XCH share (secure-the-bag pattern). |
+
+Plus four trust-root singletons (the **A.1..A.4 series**) replacing
+off-chain env-var trust roots with on-chain primitives — see
+`../populis_api/SECURITY.md` for the full audit narrative:
+
+| Contract | Role | Closes |
+|----------|------|--------|
+| `protocol_config_inner` (A.3) | Curries `(pool_launcher_id, governance_launcher_id, network, version)`; emits `state_hash` on every update. | Off-chain `POPULIS_POOL_LAUNCHER_ID` / `POPULIS_GOVERNANCE_LAUNCHER_ID` / `POPULIS_NETWORK` env-var trust roots. |
+| `admin_authority_inner` (A.2) | m-of-n quorum singleton; rotation requires *m* `AGG_SIG_ME`s from the curried allowlist plus a strictly increasing version. | `POP-CANON-012` foundation (live key revocation = chain event). |
+| `property_registry_inner` (A.4) | Append-only on-chain log of canonicalised property IDs; each spend emits a `CREATE_PUZZLE_ANNOUNCEMENT` carrying `PROTOCOL_PREFIX \|\| property_id_canon`. | `POP-CANON-014` foundation. |
+| `mint_proposal_inner` (A.1) | Per-proposal state-machine singleton: DRAFT → APPROVED (gov-signed) / CANCELLED (owner-signed). Each transition is replay-protected via monotonic version. | `POP-CANON-013` foundation. |
 
 ### Key Design Decisions
 
@@ -70,13 +83,17 @@ This is what RWA infrastructure looks like when you take the "decentralized" par
 ```
 populis_protocol/
 ├── populis_puzzles/          # Core contract package
-│   ├── *.clsp                # 12 Chialisp contracts
-│   ├── *.clib                # 7 include libraries
+│   ├── *.clsp                # 16 Chialisp contracts (12 protocol + 4 A.x)
+│   ├── *.clib                # include libraries
 │   ├── *.clsp.hex            # Pre-compiled (checksum-verified on import)
-│   ├── settlement_splitxch.py # Distribution tree builder
+│   ├── settlement_splitxch.py     # Distribution tree builder
+│   ├── protocol_config_driver.py  # A.3 — protocol-config singleton
+│   ├── admin_authority_driver.py  # A.2 — admin-authority singleton
+│   ├── property_registry_driver.py # A.4 — property-registry singleton
+│   ├── mint_proposal_driver.py    # A.1 — mint-proposal singleton
 │   └── __init__.py           # load_puzzle(), verify_puzzle_checksum()
-├── tests/                    # 108 tests, ~1s execution
-│   └── test_*.py             # Unit + integration + e2e simulation
+├── tests/                    # 362 tests, ~2s execution
+│   └── test_*.py             # Unit + integration + e2e simulation + A.x state machines
 └── pyproject.toml
 ```
 
@@ -104,7 +121,7 @@ pytest
 
 ## Test Suite
 
-108 tests covering every contract spend case, cross-contract message pairing, and a full 9-phase end-to-end lifecycle simulation:
+362 tests covering every contract spend case, cross-contract message pairing, and a full 9-phase end-to-end lifecycle simulation:
 
 1. Governance mint approval
 2. DID-gated singleton launch
@@ -115,6 +132,13 @@ pytest
 7. Secondary sale (on-chain offer)
 8. Batch settlement (secure-the-bag)
 9. Full round-trip lifecycle
+
+Plus full coverage of the A.1..A.4 trust-root singletons:
+
+- `test_admin_authority.py` — m-of-n rotation, replay protection, signing-message derivation, CLVM-level quorum guards (35 tests).
+- `test_protocol_config.py` — content-hash determinism, governance-signed updates, monotonic versioning.
+- `test_property_registry.py` — append-only log semantics, canonicalisation, CLVM replay rejection (27 tests).
+- `test_mint_proposal.py` — per-proposal state machine, transition signing, state-machine guards, replay protection (38 tests).
 
 All tests run via pure puzzle evaluation (`.run()` on curried programs). No SpendSim required for unit tests.
 
