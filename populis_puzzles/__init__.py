@@ -40,6 +40,9 @@ PUZZLE_FILENAMES = (
     "pgt_locked_inner.clsp",
     # A.3 — protocol_config singleton, replaces 3 off-chain env-var trust roots.
     "protocol_config_inner.clsp",
+    # A.2 — admin_authority singleton, replaces POPULIS_ADMIN_PUBKEY_ALLOWLIST
+    # + JWT secret with m-of-n quorum on-chain rotation.
+    "admin_authority_inner.clsp",
 )
 
 # ── Frozen checksum — update after every intentional puzzle change ──
