@@ -1,0 +1,253 @@
+"""Tests for ``populis_puzzles.eip712_helpers``.
+
+These pin the new module's outputs to the existing inline test
+helpers in ``test_admin_authority_v2.py`` (which were promoted to
+``eip712_helpers.py`` for cross-repo use by the Populis API + portal).
+
+If a value here drifts, the API and portal will hash admin records
+differently than the chain's view, silently breaking admin-desk
+gating after a rotation.  These tests are the canary.
+"""
+from __future__ import annotations
+
+import pytest
+from chia_rs.sized_bytes import bytes32
+
+from populis_puzzles.eip712_helpers import (
+    MAINNET_GENESIS_CHALLENGE,
+    TESTNET11_GENESIS_CHALLENGE,
+    compute_eip712_member_leaf_hash,
+    eip712_domain_separator,
+    eip712_hash_to_sign,
+    eip712_prefix_and_domain_separator,
+    eip712_type_hash,
+    genesis_challenge_for_network,
+)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Constants
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestConstants:
+    def test_type_hash_is_canonical(self):
+        """The CHIP-0037 type hash is keccak256 of a fixed string;
+        any change here would break wire-compat with the upstream
+        chia-wallet-sdk Eip712Member puzzle.
+        """
+        # Pinned value.  If this fails, the canonical CHIP-0037
+        # type signature has changed and every existing admin's
+        # signature scheme changes with it.
+        expected = bytes32.fromhex(
+            "72930978f119c79f9de7a13bd50c9b3261132d7b4819bdf0d3ca4d4c37ade070"
+        )
+        assert eip712_type_hash() == expected
+
+    def test_mainnet_genesis_challenge(self):
+        """Pinned from chia-blockchain initial-config.yaml."""
+        assert MAINNET_GENESIS_CHALLENGE.hex() == (
+            "ccd5bb71183532bff220ba46c268991a3ff07eb358e8255a65c30a2dce0e5fbb"
+        )
+
+    def test_testnet11_genesis_challenge(self):
+        """Pinned from chia-blockchain testnet11 overrides."""
+        assert TESTNET11_GENESIS_CHALLENGE.hex() == (
+            "37a90eb5185a9c4439a91ddc98bbadce7b4feba060d50116a067de66bf236615"
+        )
+
+
+class TestNetworkSelector:
+    def test_mainnet(self):
+        assert genesis_challenge_for_network("mainnet") == MAINNET_GENESIS_CHALLENGE
+
+    def test_testnet11(self):
+        assert (
+            genesis_challenge_for_network("testnet11")
+            == TESTNET11_GENESIS_CHALLENGE
+        )
+
+    def test_unsupported_network_raises(self):
+        with pytest.raises(ValueError, match="Unsupported network"):
+            genesis_challenge_for_network("simulator")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Domain separator + prefix
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestDomainSeparator:
+    def test_prefix_starts_with_0x1901(self):
+        """EIP-712 envelope prefix is mandated by the spec."""
+        prefix = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        assert len(prefix) == 34
+        assert prefix[:2] == b"\x19\x01"
+
+    def test_mainnet_vs_testnet11_differ(self):
+        """The genesis challenge is part of the domain salt; signatures
+        must NOT be replayable across networks.
+        """
+        mainnet = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        testnet = eip712_prefix_and_domain_separator(TESTNET11_GENESIS_CHALLENGE)
+        assert mainnet != testnet
+        # The 0x1901 prefix is the same on both; only the trailing 32 bytes differ.
+        assert mainnet[:2] == testnet[:2]
+        assert mainnet[2:] != testnet[2:]
+
+    def test_domain_separator_is_32_bytes(self):
+        sep = eip712_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        assert len(sep) == 32
+
+
+# ──────────────────────────────────────────────────────────────────────
+# hash_to_sign
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestHashToSign:
+    def test_deterministic_for_same_inputs(self):
+        prefix = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        coin_id = b"\x11" * 32
+        dph = b"\x22" * 32
+        a = eip712_hash_to_sign(prefix, coin_id, dph)
+        b = eip712_hash_to_sign(prefix, coin_id, dph)
+        assert a == b
+
+    def test_different_coin_id_different_hash(self):
+        prefix = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        a = eip712_hash_to_sign(prefix, b"\x11" * 32, b"\x22" * 32)
+        b = eip712_hash_to_sign(prefix, b"\x33" * 32, b"\x22" * 32)
+        assert a != b
+
+    def test_different_network_different_hash(self):
+        """Same coin_id + dph but different prefix → different signed hash."""
+        a = eip712_hash_to_sign(
+            eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE),
+            b"\x11" * 32,
+            b"\x22" * 32,
+        )
+        b = eip712_hash_to_sign(
+            eip712_prefix_and_domain_separator(TESTNET11_GENESIS_CHALLENGE),
+            b"\x11" * 32,
+            b"\x22" * 32,
+        )
+        assert a != b
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Leaf hash computation
+# ──────────────────────────────────────────────────────────────────────
+
+
+VALID_PUBKEY = b"\x02" + b"\x11" * 32  # 33-byte compressed pubkey
+
+
+class TestComputeLeafHash:
+    def test_deterministic(self):
+        prefix = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        a = compute_eip712_member_leaf_hash(
+            secp256k1_pubkey=VALID_PUBKEY,
+            prefix_and_domain_separator=prefix,
+        )
+        b = compute_eip712_member_leaf_hash(
+            secp256k1_pubkey=VALID_PUBKEY,
+            prefix_and_domain_separator=prefix,
+        )
+        assert a == b
+
+    def test_different_pubkey_different_leaf(self):
+        prefix = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        a = compute_eip712_member_leaf_hash(
+            secp256k1_pubkey=b"\x02" + b"\x11" * 32,
+            prefix_and_domain_separator=prefix,
+        )
+        b = compute_eip712_member_leaf_hash(
+            secp256k1_pubkey=b"\x03" + b"\x11" * 32,
+            prefix_and_domain_separator=prefix,
+        )
+        assert a != b
+
+    def test_different_network_different_leaf(self):
+        """An admin's leaf hash on mainnet must NOT match their leaf
+        hash on testnet11 — the genesis challenge is curried in via
+        prefix_and_domain_separator, so different networks → different
+        hashes for the same operator pubkey.
+        """
+        a = compute_eip712_member_leaf_hash(
+            secp256k1_pubkey=VALID_PUBKEY,
+            prefix_and_domain_separator=eip712_prefix_and_domain_separator(
+                MAINNET_GENESIS_CHALLENGE
+            ),
+        )
+        b = compute_eip712_member_leaf_hash(
+            secp256k1_pubkey=VALID_PUBKEY,
+            prefix_and_domain_separator=eip712_prefix_and_domain_separator(
+                TESTNET11_GENESIS_CHALLENGE
+            ),
+        )
+        assert a != b
+
+    def test_rejects_wrong_pubkey_length(self):
+        prefix = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        with pytest.raises(ValueError, match="33 bytes"):
+            compute_eip712_member_leaf_hash(
+                secp256k1_pubkey=b"\x02" + b"\x11" * 31,  # 32 bytes
+                prefix_and_domain_separator=prefix,
+            )
+
+    def test_rejects_wrong_prefix_length(self):
+        with pytest.raises(ValueError, match="34 bytes"):
+            compute_eip712_member_leaf_hash(
+                secp256k1_pubkey=VALID_PUBKEY,
+                prefix_and_domain_separator=b"\x19\x01" + b"\x00" * 31,  # 33 bytes
+            )
+
+    def test_rejects_wrong_prefix_marker(self):
+        bad = b"\x00\x00" + b"\x00" * 32  # right length, wrong marker
+        with pytest.raises(ValueError, match="0x1901"):
+            compute_eip712_member_leaf_hash(
+                secp256k1_pubkey=VALID_PUBKEY,
+                prefix_and_domain_separator=bad,
+            )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Cross-binding: new module matches the inline test fixture helpers
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestMatchesInlineFixtures:
+    """The helpers in this module were promoted from inline test
+    helpers in ``test_admin_authority_v2.py``.  These tests pin the
+    new module's outputs to the inline fixtures so the move is
+    verifiable and any future drift surfaces immediately.
+    """
+
+    def test_type_hash_matches_inline(self):
+        from tests.test_admin_authority_v2 import _eip712_type_hash
+        assert eip712_type_hash() == _eip712_type_hash()
+
+    def test_prefix_matches_inline(self):
+        from tests.test_admin_authority_v2 import (
+            _eip712_prefix_and_domain_separator,
+            MAINNET_GENESIS,
+        )
+        # Inline helper takes raw bytes; module helper takes bytes32.
+        # Both should produce the same value.
+        a = eip712_prefix_and_domain_separator(MAINNET_GENESIS_CHALLENGE)
+        b = _eip712_prefix_and_domain_separator(MAINNET_GENESIS)
+        assert a == b
+
+    def test_hash_to_sign_matches_inline(self):
+        from tests.test_admin_authority_v2 import (
+            _eip712_hash_to_sign,
+            _eip712_prefix_and_domain_separator,
+            MAINNET_GENESIS,
+        )
+        prefix = _eip712_prefix_and_domain_separator(MAINNET_GENESIS)
+        coin_id = b"\xaa" * 32
+        dph = b"\xbb" * 32
+        new = eip712_hash_to_sign(prefix, coin_id, dph)
+        old = _eip712_hash_to_sign(prefix, coin_id, dph)
+        assert new == old
