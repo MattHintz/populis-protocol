@@ -31,6 +31,7 @@ Tests pinning this module to the Rust implementation live in
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Optional
 
 from chia.types.blockchain_format.program import Program
@@ -176,6 +177,51 @@ def _eip712_member_puzzle() -> Program:
     return _EIP712_MEMBER_PUZZLE_CACHE
 
 
+def _atom_treehash(atom: bytes) -> bytes32:
+    """sha256tree of an atom — equivalent to ``Program.to(atom).get_tree_hash()``
+    but pure bytes-in-bytes-out so it doesn't create a LazyNode (which
+    breaks under cross-thread access in pyo3).
+
+    Per CLVM tree-hash semantics: sha256(b"\\x01" || atom).
+    """
+    return bytes32(hashlib.sha256(b"\x01" + atom).digest())
+
+
+def _quoted_mod_hash(mod_hash: bytes32) -> bytes32:
+    """sha256tree of (q . mod_hash) — i.e., sha256(0x02 || sha256(0x01 ||
+    0x01) || sha256(0x01 || mod_hash)).
+
+    Mirrors ``chia.wallet.util.curry_and_treehash.calculate_hash_of_
+    quoted_mod_hash`` but in pure bytes so it sidesteps LazyNode
+    threading hazards.
+    """
+    one_one = hashlib.sha256(b"\x01\x01").digest()
+    one_mod = hashlib.sha256(b"\x01" + bytes(mod_hash)).digest()
+    return bytes32(hashlib.sha256(b"\x02" + one_one + one_mod).digest())
+
+
+# Module-level cache for the Eip712Member mod hash.  Computed once on
+# first use; subsequent compute_eip712_member_leaf_hash calls reuse it.
+# This is the only piece of the puzzle that needs Program.get_tree_hash
+# (one-shot at module load), all per-call work is pure-bytes curry maths.
+_EIP712_MEMBER_MOD_HASH_CACHE: Optional[bytes32] = None
+
+
+def _eip712_member_mod_hash() -> bytes32:
+    """Tree hash of the (uncurried) ``eip712_member.clsp`` puzzle.
+
+    Computed once + cached so per-request curry computations are pure
+    bytes work (no LazyNode allocation).  See ``_atom_treehash`` for
+    why this matters for FastAPI / anyio-thread safety.
+    """
+    global _EIP712_MEMBER_MOD_HASH_CACHE
+    if _EIP712_MEMBER_MOD_HASH_CACHE is None:
+        _EIP712_MEMBER_MOD_HASH_CACHE = bytes32(
+            _eip712_member_puzzle().get_tree_hash()
+        )
+    return _EIP712_MEMBER_MOD_HASH_CACHE
+
+
 def compute_eip712_member_leaf_hash(
     *,
     secp256k1_pubkey: bytes,
@@ -229,12 +275,56 @@ def compute_eip712_member_leaf_hash(
     # Curry order matches the Rust struct field order in
     # chia-sdk-types/src/puzzles/mips/members/eip712_member.rs:
     #   prefix_and_domain_separator, type_hash, public_key.
-    curried = _eip712_member_puzzle().curry(
-        prefix_and_domain_separator,
-        th,
-        secp256k1_pubkey,
-    )
-    return bytes32(curried.get_tree_hash())
+    #
+    # We use pure-bytes curry-and-treehash math (rather than
+    # ``Program.curry().get_tree_hash()``) to avoid creating a
+    # per-call LazyNode that would panic under cross-thread access
+    # when this helper is invoked from FastAPI's anyio worker pool.
+    # The math mirrors ``chia.wallet.util.curry_and_treehash`` but
+    # operates on raw 32-byte hashes throughout.
+    quoted_mod_hash = _quoted_mod_hash(_eip712_member_mod_hash())
+    args_tree_hashes = [
+        _atom_treehash(bytes(prefix_and_domain_separator)),
+        _atom_treehash(bytes(th)),
+        _atom_treehash(bytes(secp256k1_pubkey)),
+    ]
+
+    # curry_and_treehash recursive formula:
+    #   pair(A_KW, pair(quoted_mod, pair(curried_values_tree_hash([args]), NIL)))
+    #
+    # where curried_values_tree_hash([])       = ONE_TREEHASH (= sha256(b"\x01"))
+    # and   curried_values_tree_hash([a, ...]) =
+    #       pair(C_KW, pair(pair(Q_KW, a), pair(curried_values_tree_hash([...]), NIL)))
+    #
+    # Constants from chia-blockchain ``curry_and_treehash``:
+    A_KW = 2  # opcode for `apply` (run a curried function)
+    C_KW = 4  # opcode for `cons` (build the args list lazily)
+    Q_KW = 1  # opcode for `quote` (so atom args aren't re-evaluated)
+    a_kw_th = _atom_treehash(bytes([A_KW]))
+    c_kw_th = _atom_treehash(bytes([C_KW]))
+    q_kw_th = _atom_treehash(bytes([Q_KW]))
+    one_treehash = _atom_treehash(b"")  # sha256(0x01) — Program.to(b"").get_tree_hash()
+    # Note: Program.to(b"").get_tree_hash() == sha256(0x01 || b"") == sha256(0x01)
+    # which IS the empty-list tree hash sentinel.  Computed once.
+
+    def _pair_th(left: bytes, right: bytes) -> bytes32:
+        return bytes32(hashlib.sha256(b"\x02" + left + right).digest())
+
+    def _curried_values_th(args: list[bytes32]) -> bytes32:
+        if not args:
+            return one_treehash
+        head, *tail = args
+        # pair(Q_KW, a)
+        quoted_arg = _pair_th(q_kw_th, head)
+        # pair(curried_values_th([...]), NIL)
+        rest_then_nil = _pair_th(_curried_values_th(tail), one_treehash)
+        # pair(C_KW, pair(quoted_arg, rest_then_nil))
+        return _pair_th(c_kw_th, _pair_th(quoted_arg, rest_then_nil))
+
+    cv_th = _curried_values_th(args_tree_hashes)
+    cv_then_nil = _pair_th(cv_th, one_treehash)
+    quoted_then_cv_then_nil = _pair_th(quoted_mod_hash, cv_then_nil)
+    return _pair_th(a_kw_th, quoted_then_cv_then_nil)
 
 
 __all__ = [
