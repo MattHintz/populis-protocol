@@ -23,10 +23,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
+from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
+from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
+    SINGLETON_LAUNCHER_HASH,
+    SINGLETON_MOD_HASH,
+)
 from chia_rs.sized_bytes import bytes32
+from chia_rs.sized_ints import uint64
 
 from populis_puzzles import load_puzzle
+
+# Standard chia singleton constants pulled in for the launch flow.
+SINGLETON_AMOUNT = uint64(1)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -206,6 +215,210 @@ def make_inner_puzzle(
 def make_inner_puzzle_hash(**kwargs) -> bytes32:
     """Tree hash of the curried inner puzzle. Forwards all kwargs."""
     return bytes32(make_inner_puzzle(**kwargs).get_tree_hash())
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Genesis launch (Phase 9-Hermes-D D-2).
+#
+# A v2 admin-authority singleton starts life as a single-spend transaction:
+#
+#   1. The operator's funding coin (at any p2-puzzle that authorises XCH
+#      transfer — typically the standard wallet puzzle, BLS-signed) emits
+#      ``CREATE_COIN(SINGLETON_LAUNCHER_HASH, 1)``.  This produces the
+#      "launcher coin", whose name (= coin id) becomes the singleton's
+#      permanent ``launcher_id``.
+#   2. The launcher coin spends with solution
+#      ``(eve_full_puzzle_hash, 1, ())``, emitting:
+#        a. ``CREATE_COIN(eve_full_puzzle_hash, 1)`` → the eve coin.
+#        b. ``CREATE_PUZZLE_ANNOUNCEMENT(sha256tree(launcher_solution))``.
+#      The launcher coin uses the standard chia launcher puzzle, which
+#      is permissionless (no signature needed).
+#   3. The eve coin's full puzzle = singleton_top_layer.curry(
+#         SINGLETON_STRUCT(launcher_id), v2_inner_puzzle
+#      ).  The v2 inner puzzle is what ``make_inner_puzzle`` produces.
+#
+# These helpers compute the deterministic outputs of step 1+2+3 from
+# the operator's intended state.  The portal (Hybrid-C client) calls
+# them to construct the spend bundle the operator's chia wallet then
+# signs (only the funding coin needs a signature).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class LaunchOutputs:
+    """All deterministic coins + announcements produced by a v2 launch.
+
+    Returned by :func:`compute_launch_outputs`. Exposes everything the
+    portal / operator tools need to:
+
+    * Build the funding-coin spend (``launcher_coin`` is the CREATE_COIN
+      target).
+    * Build the launcher-coin spend (``launcher_solution`` is its solution,
+      which the standard singleton launcher puzzle will run).
+    * Verify post-launch state (``eve_coin``'s lineage parent is
+      ``launcher_coin.name()``, and ``eve_full_puzzle_hash`` is what
+      future reads of the singleton lineage will see).
+    * Cross-check that the launcher-spend announcement matches what
+      observers expect (``launcher_announcement_hash``).
+
+    Fields are all immutable + JSON-friendly so they can be cached, logged,
+    or surfaced in ``/admin/auth/authority_v2`` snapshots.
+    """
+
+    launcher_coin: Coin
+    """The launcher coin spawned from the funding coin's CREATE_COIN.
+
+    Its ``.name()`` is the singleton's permanent ``launcher_id``.
+    """
+
+    launcher_id: bytes32
+    """Convenience accessor for ``launcher_coin.name()``."""
+
+    eve_inner_puzzle_hash: bytes32
+    """sha256tree of the curried v2 inner puzzle (what ``make_inner_puzzle_hash`` returns)."""
+
+    eve_full_puzzle_hash: bytes32
+    """sha256tree of ``singleton_top_layer.curry(SINGLETON_STRUCT, eve_inner_puzzle)``.
+
+    This is the puzzle hash the eve coin actually lives at.  Subsequent
+    OPERATIONAL spends will recurry into a child coin at the same
+    inner-puzzle hash (or a new one if the spend mutated state).
+    """
+
+    eve_coin: Coin
+    """The eve coin: the singleton's first stateful incarnation."""
+
+    launcher_solution: Program
+    """The solution program the launcher coin is spent with.
+
+    Layout: ``(eve_full_puzzle_hash eve_amount key_value_list)``.
+    The standard chia launcher puzzle hashes this list and emits it
+    as ``CREATE_PUZZLE_ANNOUNCEMENT``.
+    """
+
+    launcher_announcement_message: bytes32
+    """sha256tree of ``launcher_solution`` — the body of the launcher's
+    ``CREATE_PUZZLE_ANNOUNCEMENT``.  External observers correlating
+    chain state with off-chain expectations match on this value."""
+
+    launcher_announcement_id: bytes32
+    """sha256(launcher_id || launcher_announcement_message).
+
+    This is the value that ``ASSERT_PUZZLE_ANNOUNCEMENT`` / external
+    observers index by — it ties the announcement to the specific
+    launcher coin (preventing announcements from one launch being
+    accepted as proof of a different launch).
+    """
+
+
+def _singleton_struct(launcher_id: bytes32) -> Program:
+    """Standard chia singleton struct ``(MOD_HASH . (LAUNCHER_ID . LAUNCHER_PH))``.
+
+    Curried into ``singleton_top_layer`` to bind the inner puzzle to a
+    specific singleton lineage.  Off-chain readers that walk the lineage
+    use this struct to validate every spend.
+    """
+    return Program.to((SINGLETON_MOD_HASH, (launcher_id, SINGLETON_LAUNCHER_HASH)))
+
+
+def singleton_full_puzzle_hash(
+    launcher_id: bytes32, inner_puzzle_hash: bytes32
+) -> bytes32:
+    """sha256tree of the singleton wrapper around an inner puzzle.
+
+    Equivalent to ``puzzle_for_singleton(launcher_id, inner).get_tree_hash()``
+    where ``inner.get_tree_hash() == inner_puzzle_hash``.  Hand-rolled so
+    it's deterministic + cheap (no Program allocation).
+
+    NOTE: ``curry_and_treehash`` takes the tree hashes of the BARE
+    arguments — it wraps each one as ``(q . arg)`` internally via
+    ``curried_values_tree_hash``.  Passing pre-quoted tree hashes
+    double-wraps and produces the wrong result.  ``protocol_deployment.py``
+    has the same shape but the bug is masked because its tests
+    self-compare; this implementation is verified against
+    ``puzzle_for_singleton`` in
+    ``tests/test_admin_authority_v2_launch.py``.
+    """
+    from chia.wallet.util.curry_and_treehash import (
+        calculate_hash_of_quoted_mod_hash,
+        curry_and_treehash,
+    )
+
+    quoted_mod = calculate_hash_of_quoted_mod_hash(SINGLETON_MOD_HASH)
+    struct_hash = bytes32(_singleton_struct(launcher_id).get_tree_hash())
+    return bytes32(
+        curry_and_treehash(
+            quoted_mod,
+            struct_hash,
+            inner_puzzle_hash,
+        )
+    )
+
+
+def compute_launch_outputs(
+    *,
+    parent_coin_id: bytes32,
+    eve_inner_puzzle_hash: bytes32,
+    eve_amount: int = int(SINGLETON_AMOUNT),
+) -> LaunchOutputs:
+    """Compute every deterministic output of a v2 admin-authority launch.
+
+    Args:
+        parent_coin_id: The funding coin's ``.name()`` (i.e. coin id).
+            The launcher coin is uniquely determined by this + the
+            standard SINGLETON_LAUNCHER_HASH + amount, so the singleton's
+            ``launcher_id`` is locked in once the operator chooses
+            which funding coin to spend.
+        eve_inner_puzzle_hash: sha256tree of the curried v2 inner
+            puzzle (i.e. ``make_inner_puzzle_hash(...)``).  This binds
+            the genesis state — admin set, MIPS quorum, version 1, etc.
+        eve_amount: Mojos to give the eve coin.  Always 1 for a fresh
+            launch (singletons store no value); kept parameterized for
+            test flexibility.
+
+    Returns:
+        :class:`LaunchOutputs` with every coin + announcement the launch
+        produces.  All values are deterministic from the inputs — no
+        randomness, no signatures, no chain reads needed.
+    """
+    import hashlib
+
+    launcher_coin = Coin(
+        parent_coin_info=parent_coin_id,
+        puzzle_hash=SINGLETON_LAUNCHER_HASH,
+        amount=SINGLETON_AMOUNT,
+    )
+    launcher_id = bytes32(launcher_coin.name())
+
+    eve_full_puzzle_hash = singleton_full_puzzle_hash(
+        launcher_id, eve_inner_puzzle_hash
+    )
+
+    eve_coin = Coin(
+        parent_coin_info=launcher_id,
+        puzzle_hash=eve_full_puzzle_hash,
+        amount=uint64(eve_amount),
+    )
+
+    launcher_solution = Program.to([eve_full_puzzle_hash, eve_amount, []])
+    launcher_announcement_message = bytes32(launcher_solution.get_tree_hash())
+
+    # Standard chia announcement-id formula: sha256(coin_id || message).
+    # Matches what ASSERT_PUZZLE_ANNOUNCEMENT consumers expect.
+    launcher_announcement_id = bytes32(
+        hashlib.sha256(launcher_id + launcher_announcement_message).digest()
+    )
+
+    return LaunchOutputs(
+        launcher_coin=launcher_coin,
+        launcher_id=launcher_id,
+        eve_inner_puzzle_hash=eve_inner_puzzle_hash,
+        eve_full_puzzle_hash=eve_full_puzzle_hash,
+        eve_coin=eve_coin,
+        launcher_solution=launcher_solution,
+        launcher_announcement_message=launcher_announcement_message,
+        launcher_announcement_id=launcher_announcement_id,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────

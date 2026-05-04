@@ -25,6 +25,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
+    SINGLETON_LAUNCHER_HASH,
+    SINGLETON_MOD_HASH,
+)
 from chia_rs.sized_bytes import bytes32
 
 from populis_puzzles.admin_authority_v2_driver import (
@@ -38,9 +42,11 @@ from populis_puzzles.admin_authority_v2_driver import (
     PendingOp,
     admin_authority_v2_inner_mod_hash,
     compute_admins_hash,
+    compute_launch_outputs,
     compute_pending_ops_hash,
     compute_state_hash,
     make_inner_puzzle_hash,
+    singleton_full_puzzle_hash,
 )
 
 
@@ -211,6 +217,76 @@ def build_fixture() -> dict[str, Any]:
             }
         )
 
+    # ──────────────────────────────────────────────────────────────────
+    # singleton_full_puzzle_hash + compute_launch_outputs (D-2.1).
+    # ──────────────────────────────────────────────────────────────────
+
+    # singleton_full_puzzle_hash cases.  Use distinct launcher_ids and
+    # inner_puzzle_hashes so the TS port can't get away with constant
+    # output regardless of input.
+    singleton_full_cases: list[dict[str, Any]] = []
+    for launcher_id, inner, label in (
+        (h1, h2, "h1-h2"),
+        (h2, h1, "swapped-h1-h2"),
+        (h3, h4, "h3-h4"),
+    ):
+        singleton_full_cases.append(
+            {
+                "label": label,
+                "input": {
+                    "launcher_id": _hex(launcher_id),
+                    "inner_puzzle_hash": _hex(inner),
+                },
+                "expected": _hex(singleton_full_puzzle_hash(launcher_id, inner)),
+            }
+        )
+
+    # compute_launch_outputs cases.  Each case bundles a parent coin id
+    # + an eve inner puzzle hash and emits every deterministic output.
+    # The TS port replays this and asserts byte equivalence on each
+    # field — catches divergence in launcher coin computation, eve
+    # full puzzle hash, launcher solution shape, or announcement
+    # formula.
+    representative_inner_hash = make_inner_puzzle_hash(
+        mips_root_hash=h1,
+        admins_hash=h2,
+        pending_ops_hash=EMPTY_LIST_HASH,
+        authority_version=1,
+    )
+
+    launch_cases: list[dict[str, Any]] = []
+    for parent_coin_id, eve_inner, eve_amount, label in (
+        (h1, representative_inner_hash, 1, "default-fresh-launch"),
+        (h2, representative_inner_hash, 1, "different-funding-coin"),
+        (h1, h3, 1, "different-eve-state"),
+        # Higher eve amount — kept low (still odd) for singleton compatibility.
+        # Most operators will use 1, but the helper accepts arbitrary values.
+        (h1, representative_inner_hash, 3, "non-default-eve-amount"),
+    ):
+        outputs = compute_launch_outputs(
+            parent_coin_id=parent_coin_id,
+            eve_inner_puzzle_hash=eve_inner,
+            eve_amount=eve_amount,
+        )
+        launch_cases.append(
+            {
+                "label": label,
+                "input": {
+                    "parent_coin_id": _hex(parent_coin_id),
+                    "eve_inner_puzzle_hash": _hex(eve_inner),
+                    "eve_amount": eve_amount,
+                },
+                "expected": {
+                    "launcher_id": _hex(outputs.launcher_id),
+                    "eve_full_puzzle_hash": _hex(outputs.eve_full_puzzle_hash),
+                    "launcher_announcement_message": _hex(
+                        outputs.launcher_announcement_message
+                    ),
+                    "launcher_announcement_id": _hex(outputs.launcher_announcement_id),
+                },
+            }
+        )
+
     return {
         # Constants surfaced for the TS port to embed verbatim.
         "constants": {
@@ -223,11 +299,19 @@ def build_fixture() -> dict[str, Any]:
             "default_pgt_governance_puzzle_hash": _hex(
                 DEFAULT_PGT_GOVERNANCE_PUZZLE_HASH
             ),
+            # Canonical chia singleton constants — bundled here so the
+            # TS port can hardcode them and have a fixture-level guard
+            # against drift (e.g. if the chia-blockchain package ever
+            # changes the launcher puzzle bytecode).
+            "singleton_mod_hash": _hex(SINGLETON_MOD_HASH),
+            "singleton_launcher_hash": _hex(SINGLETON_LAUNCHER_HASH),
         },
         "state_hash": state_cases,
         "admins_hash": admins_cases,
         "pending_ops_hash": pending_cases,
         "inner_puzzle_hash": inner_puzzle_cases,
+        "singleton_full_puzzle_hash": singleton_full_cases,
+        "launch_outputs": launch_cases,
     }
 
 
@@ -256,7 +340,9 @@ def main() -> None:
         f"{len(fixture['state_hash'])} state cases, "
         f"{len(fixture['admins_hash'])} admins cases, "
         f"{len(fixture['pending_ops_hash'])} pending cases, "
-        f"{len(fixture['inner_puzzle_hash'])} inner-puzzle cases"
+        f"{len(fixture['inner_puzzle_hash'])} inner-puzzle cases, "
+        f"{len(fixture['singleton_full_puzzle_hash'])} singleton-full cases, "
+        f"{len(fixture['launch_outputs'])} launch cases"
     )
 
 
