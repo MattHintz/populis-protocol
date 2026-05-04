@@ -211,6 +211,59 @@ class TestComputeLeafHash:
                 prefix_and_domain_separator=bad,
             )
 
+    def test_matches_chia_curry_and_treehash(self):
+        """The pure-bytes helper must produce the **exact** same hash as
+        ``chia.wallet.util.curry_and_treehash`` operating on the same
+        inputs.  This is the semantic invariant the on-chain
+        ``(= (sha256tree approving_member_reveal) <leaf>)`` check
+        relies on at admin-spend time.
+
+        Regression test for a bug where the bytes-only helper used
+        wrong constants (double-hashed the mod_hash, conflated
+        ``ONE_TREEHASH = sha256(0x01||0x01)`` with
+        ``NIL_TREEHASH = sha256(0x01)``) and produced leaf hashes that
+        diverged from ``Program.curry().get_tree_hash()`` and from the
+        chia-wallet-sdk Rust ``Eip712Member::curry_tree_hash``.
+        """
+        from chia.wallet.util.curry_and_treehash import (
+            calculate_hash_of_quoted_mod_hash,
+            curry_and_treehash,
+        )
+        from chia.types.blockchain_format.program import Program
+
+        from populis_puzzles.eip712_helpers import (
+            _eip712_member_mod_hash,
+            eip712_type_hash,
+        )
+
+        prefix = eip712_prefix_and_domain_separator(TESTNET11_GENESIS_CHALLENGE)
+        type_hash = eip712_type_hash()
+
+        # Method 1: populis bytes-only helper.
+        populis_hash = compute_eip712_member_leaf_hash(
+            secp256k1_pubkey=VALID_PUBKEY,
+            prefix_and_domain_separator=prefix,
+            type_hash=type_hash,
+        )
+
+        # Method 2: chia's reference curry_and_treehash.
+        qmh = calculate_hash_of_quoted_mod_hash(_eip712_member_mod_hash())
+        chia_hash = curry_and_treehash(
+            qmh,
+            Program.to(prefix).get_tree_hash(),
+            Program.to(type_hash).get_tree_hash(),
+            Program.to(VALID_PUBKEY).get_tree_hash(),
+        )
+
+        assert populis_hash == chia_hash, (
+            f"populis bytes-only curry diverges from chia reference:\n"
+            f"  populis: 0x{populis_hash.hex()}\n"
+            f"  chia:    0x{chia_hash.hex()}\n"
+            f"This means admin-record leaf hashes won't match the actual "
+            f"sha256tree of the curried Eip712Member puzzle and the "
+            f"on-chain admin-spend signature check would always fail."
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Cross-binding: new module matches the inline test fixture helpers

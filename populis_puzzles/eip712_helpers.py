@@ -188,16 +188,26 @@ def _atom_treehash(atom: bytes) -> bytes32:
 
 
 def _quoted_mod_hash(mod_hash: bytes32) -> bytes32:
-    """sha256tree of (q . mod_hash) — i.e., sha256(0x02 || sha256(0x01 ||
-    0x01) || sha256(0x01 || mod_hash)).
+    """sha256tree of ``(q . mod_hash)`` where ``mod_hash`` is *already*
+    a tree hash — i.e., ``sha256(0x02 || sha256(0x01 || 0x01) || mod_hash)``.
 
     Mirrors ``chia.wallet.util.curry_and_treehash.calculate_hash_of_
-    quoted_mod_hash`` but in pure bytes so it sidesteps LazyNode
-    threading hazards.
+    quoted_mod_hash`` byte-for-byte but in pure bytes so it sidesteps
+    LazyNode threading hazards under ``pyo3``/anyio worker pools.
+
+    The Q_KW (``0x01``) is treated as an atom (so its tree hash is
+    ``sha256(0x01 || 0x01)``).  The ``mod_hash`` is **not** re-hashed:
+    in CLVM curry, the second element of ``(q . mod_hash)`` is the
+    program tree itself, whose tree hash is ``mod_hash`` by definition.
+    Earlier revisions of this helper double-hashed (``sha256(0x01 ||
+    mod_hash)``) which produced a hash that diverged from
+    ``Program.curry().get_tree_hash()`` and from the chia-wallet-sdk
+    Rust ``Eip712Member::curry_tree_hash`` — admin records produced
+    with that variant would fail the on-chain ``(= (sha256tree
+    approving_member_reveal) <leaf>)`` check at spend time.
     """
     one_one = hashlib.sha256(b"\x01\x01").digest()
-    one_mod = hashlib.sha256(b"\x01" + bytes(mod_hash)).digest()
-    return bytes32(hashlib.sha256(b"\x02" + one_one + one_mod).digest())
+    return bytes32(hashlib.sha256(b"\x02" + one_one + bytes(mod_hash)).digest())
 
 
 # Module-level cache for the Eip712Member mod hash.  Computed once on
@@ -289,12 +299,30 @@ def compute_eip712_member_leaf_hash(
         _atom_treehash(bytes(secp256k1_pubkey)),
     ]
 
-    # curry_and_treehash recursive formula:
-    #   pair(A_KW, pair(quoted_mod, pair(curried_values_tree_hash([args]), NIL)))
+    # curry_and_treehash recursive formula (mirrors
+    # ``chia.wallet.util.curry_and_treehash`` byte-for-byte):
     #
-    # where curried_values_tree_hash([])       = ONE_TREEHASH (= sha256(b"\x01"))
-    # and   curried_values_tree_hash([a, ...]) =
-    #       pair(C_KW, pair(pair(Q_KW, a), pair(curried_values_tree_hash([...]), NIL)))
+    #   curry(mod, args) = (a (q . mod) curried_values(args))
+    #
+    # whose tree hash is:
+    #   pair(A_KW_TH, pair(quoted_mod_th, pair(curried_values_th, NIL_TH)))
+    #
+    # where:
+    #   curried_values_th([])       = ONE_TREEHASH = shatree_atom(0x01) =
+    #                                 sha256(0x01 || 0x01)
+    #     (the trailing "1" atom in the curry env: ``(c (q . a) 1)``)
+    #   curried_values_th([a, ...]) =
+    #       pair(C_KW_TH, pair(pair(Q_KW_TH, a),
+    #                          pair(curried_values_th([...]), NIL_TH)))
+    #   NIL_TREEHASH = shatree_atom(b"") = sha256(0x01)
+    #     (the empty-list / nil sentinel)
+    #
+    # Note: NIL_TREEHASH and ONE_TREEHASH are **different values** —
+    # earlier revisions of this helper conflated them (used NIL where
+    # ONE was needed for the curried-values base case), producing leaf
+    # hashes that diverged from chia's reference and the chia-wallet-sdk
+    # Rust ``Eip712Member::curry_tree_hash`` and would fail on-chain at
+    # spend time.
     #
     # Constants from chia-blockchain ``curry_and_treehash``:
     A_KW = 2  # opcode for `apply` (run a curried function)
@@ -303,9 +331,8 @@ def compute_eip712_member_leaf_hash(
     a_kw_th = _atom_treehash(bytes([A_KW]))
     c_kw_th = _atom_treehash(bytes([C_KW]))
     q_kw_th = _atom_treehash(bytes([Q_KW]))
-    one_treehash = _atom_treehash(b"")  # sha256(0x01) — Program.to(b"").get_tree_hash()
-    # Note: Program.to(b"").get_tree_hash() == sha256(0x01 || b"") == sha256(0x01)
-    # which IS the empty-list tree hash sentinel.  Computed once.
+    one_treehash = _atom_treehash(b"\x01")  # sha256(0x01 || 0x01) — curry-args base case
+    nil_treehash = _atom_treehash(b"")  # sha256(0x01) — empty-list sentinel
 
     def _pair_th(left: bytes, right: bytes) -> bytes32:
         return bytes32(hashlib.sha256(b"\x02" + left + right).digest())
@@ -317,12 +344,12 @@ def compute_eip712_member_leaf_hash(
         # pair(Q_KW, a)
         quoted_arg = _pair_th(q_kw_th, head)
         # pair(curried_values_th([...]), NIL)
-        rest_then_nil = _pair_th(_curried_values_th(tail), one_treehash)
+        rest_then_nil = _pair_th(_curried_values_th(tail), nil_treehash)
         # pair(C_KW, pair(quoted_arg, rest_then_nil))
         return _pair_th(c_kw_th, _pair_th(quoted_arg, rest_then_nil))
 
     cv_th = _curried_values_th(args_tree_hashes)
-    cv_then_nil = _pair_th(cv_th, one_treehash)
+    cv_then_nil = _pair_th(cv_th, nil_treehash)
     quoted_then_cv_then_nil = _pair_th(quoted_mod_hash, cv_then_nil)
     return _pair_th(a_kw_th, quoted_then_cv_then_nil)
 
