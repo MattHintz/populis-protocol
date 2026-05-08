@@ -56,6 +56,15 @@ PUZZLE_FILENAMES = (
     # A.1 — mint_proposal singleton; per-proposal state machine
     # (DRAFT → APPROVED → CANCELLED) replacing MintProposalStore.
     "mint_proposal_inner.clsp",
+    # A.1 v2 — MIPS-pluggable mint_proposal singleton.  Replaces the
+    # hard-coded BLS OWNER_PUBKEY / GOV_PUBKEY of v1 with curried
+    # CHIP-0043 member tree hashes so a single deployment can mix BLS
+    # / Eip712Member (EVM) / passkey / etc. member types freely.
+    # State machine semantics unchanged from v1; auth surface is the
+    # only refactor.  See research/PHASE_9_HERMES_D_SESSION_SUMMARY.md
+    # and the puzzle docstring for the binding-hash construction that
+    # blocks signature replay across transitions / proposals.
+    "mint_proposal_inner_v2.clsp",
 )
 
 # ── Frozen checksum — update after every intentional puzzle change ──
@@ -71,16 +80,12 @@ PUZZLE_FILENAMES = (
 # All four A.x puzzles' mod hashes therefore changed; the new values
 # are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
-    # 2026-05-03: critical bugfix to admin_authority_v2_inner.clsp
-    # (Phase 9-Hermes-C.3 step 1). All handler functions converted from
-    # defun to defun-inline. Plain defun creates an isolated scope; the
-    # handlers' references to curried mod params (MIPS_ROOT_HASH,
-    # ADMINS_HASH, ...) silently resolved to nil, which made every
-    # check fail. defun-inline expands macro-style at the call site,
-    # preserving access to the outer mod's environment. The first
-    # OPERATIONAL runtime test (test_admin_authority_v2.py) now passes.
-    # Bytecode grew from 8069 -> 9694 bytes due to inlining.
-    "1794f2c2241e357d583cbf78d6449269fe2ba36377cdb73689dc252d60d5b0be"
+    # 2026-05-05: Phase 9-Hermes-D added mint_proposal_inner_v2.clsp
+    # (the MIPS-pluggable mint-proposal puzzle).  Adding a puzzle to
+    # PUZZLE_FILENAMES extends the canonical order, so the all-puzzle
+    # checksum changes even though no existing puzzle's bytecode did.
+    # Mod hash for the new file is pinned in mint_proposal_v2_driver.py.
+    "a545d2e0af3599db15001b85e843005b09acbe47724ccc091ba8c4d96a9956df"
 )
 
 # ── Cache ──
