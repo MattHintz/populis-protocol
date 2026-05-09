@@ -52,6 +52,8 @@ SECP_OWNER_PUBKEY = b"\x02" + bytes(32)
 
 # Members Merkle root — 32-byte placeholder (one-leaf tree for single-owner vaults)
 MEMBERS_MERKLE_ROOT = bytes32(b"\xee" * 32)
+IDENTITY_ATTEST_ROOT = bytes32(bytes.fromhex("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"))
+ZKPASSPORT_BRIDGE_POLICY_HASH = bytes32(b"\x00" * 32)
 
 VAULT_SINGLETON_STRUCT = Program.to(
     (SINGLETON_MOD_HASH, (VAULT_LAUNCHER_ID, LAUNCHER_PUZZLE_HASH))
@@ -97,6 +99,8 @@ def curry_vault_bls() -> Program:
         BLS_OWNER_PUBKEY,
         AUTH_TYPE_BLS,
         MEMBERS_MERKLE_ROOT,
+        IDENTITY_ATTEST_ROOT,
+        ZKPASSPORT_BRIDGE_POLICY_HASH,
         SINGLETON_MOD_HASH,
         POOL_LAUNCHER_ID,
         LAUNCHER_PUZZLE_HASH,
@@ -110,6 +114,8 @@ def curry_vault_secp() -> Program:
         SECP_OWNER_PUBKEY,
         AUTH_TYPE_SECP256K1,
         MEMBERS_MERKLE_ROOT,
+        IDENTITY_ATTEST_ROOT,
+        ZKPASSPORT_BRIDGE_POLICY_HASH,
         SINGLETON_MOD_HASH,
         POOL_LAUNCHER_ID,
         LAUNCHER_PUZZLE_HASH,
@@ -157,10 +163,14 @@ class TestVaultCompile:
         pubkey_b = bytes([1] * 48)
         vault_a = VAULT_INNER_MOD.curry(
             VAULT_SINGLETON_STRUCT, pubkey_a, AUTH_TYPE_BLS, MEMBERS_MERKLE_ROOT,
+            IDENTITY_ATTEST_ROOT,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
             SINGLETON_MOD_HASH, POOL_LAUNCHER_ID, LAUNCHER_PUZZLE_HASH,
         )
         vault_b = VAULT_INNER_MOD.curry(
             VAULT_SINGLETON_STRUCT, pubkey_b, AUTH_TYPE_BLS, MEMBERS_MERKLE_ROOT,
+            IDENTITY_ATTEST_ROOT,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
             SINGLETON_MOD_HASH, POOL_LAUNCHER_ID, LAUNCHER_PUZZLE_HASH,
         )
         assert vault_a.get_tree_hash() != vault_b.get_tree_hash()
@@ -427,6 +437,8 @@ class TestVaultSecp256k1RealSignature:
             pub33,
             AUTH_TYPE_SECP256K1,
             MEMBERS_MERKLE_ROOT,
+            IDENTITY_ATTEST_ROOT,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
             SINGLETON_MOD_HASH,
             POOL_LAUNCHER_ID,
             LAUNCHER_PUZZLE_HASH,
@@ -474,6 +486,8 @@ class TestVaultSecp256k1RealSignature:
 
         curried = VAULT_INNER_MOD.curry(
             VAULT_SINGLETON_STRUCT, pub33, AUTH_TYPE_SECP256K1, MEMBERS_MERKLE_ROOT,
+            IDENTITY_ATTEST_ROOT,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
             SINGLETON_MOD_HASH, POOL_LAUNCHER_ID, LAUNCHER_PUZZLE_HASH,
         )
         my_inner_puzhash = curried.get_tree_hash()
@@ -508,6 +522,9 @@ class TestVaultSecurityGating:
             VAULT_SINGLETON_STRUCT,
             BLS_OWNER_PUBKEY,
             99,  # unknown auth type
+            MEMBERS_MERKLE_ROOT,
+            IDENTITY_ATTEST_ROOT,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
             SINGLETON_MOD_HASH,
             POOL_LAUNCHER_ID,
             LAUNCHER_PUZZLE_HASH,
@@ -704,6 +721,58 @@ class TestVaultDriverHelpers:
         assert inner is not None
         assert len(bytes(inner.get_tree_hash())) == 32
 
+    def test_puzzle_for_vault_inner_defaults_identity_state(self):
+        from populis_puzzles.vault_driver import (
+            DEFAULT_IDENTITY_ATTEST_ROOT,
+            DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
+            AUTH_TYPE_BLS,
+            parse_vault_inner_puzzle,
+            puzzle_for_vault_inner,
+        )
+        inner = puzzle_for_vault_inner(
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+        )
+        state = parse_vault_inner_puzzle(inner)
+        assert state.owner_pubkey_bytes == BLS_OWNER_PUBKEY
+        assert state.auth_type == AUTH_TYPE_BLS
+        assert state.members_merkle_root == MEMBERS_MERKLE_ROOT
+        assert state.identity_attest_root == DEFAULT_IDENTITY_ATTEST_ROOT
+        assert state.zkpassport_bridge_policy_hash == DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH
+        assert state.pool_launcher_id == POOL_LAUNCHER_ID
+
+    def test_puzzle_for_vault_inner_accepts_custom_identity_state(self):
+        from populis_puzzles.vault_driver import (
+            AUTH_TYPE_BLS,
+            parse_vault_inner_puzzle,
+            puzzle_for_vault_inner,
+        )
+        identity_root = bytes32(b"\x77" * 32)
+        bridge_policy_hash = bytes32(b"\x88" * 32)
+        default_inner = puzzle_for_vault_inner(
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+        )
+        custom_inner = puzzle_for_vault_inner(
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+            identity_attest_root=identity_root,
+            zkpassport_bridge_policy_hash=bridge_policy_hash,
+        )
+        state = parse_vault_inner_puzzle(custom_inner)
+        assert custom_inner.get_tree_hash() != default_inner.get_tree_hash()
+        assert state.identity_attest_root == identity_root
+        assert state.zkpassport_bridge_policy_hash == bridge_policy_hash
+
     def test_bls_and_secp_inner_puzzles_have_different_hashes(self):
         from populis_puzzles.vault_driver import (
             puzzle_for_vault_inner, AUTH_TYPE_BLS, AUTH_TYPE_SECP256K1,
@@ -865,6 +934,8 @@ class TestVaultUpdateKeys:
             pubkey,
             AUTH_TYPE_BLS,
             root,
+            IDENTITY_ATTEST_ROOT,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
             SINGLETON_MOD_HASH,
             POOL_LAUNCHER_ID,
             LAUNCHER_PUZZLE_HASH,
@@ -1083,6 +1154,8 @@ class TestVaultSecp256r1Dispatch:
             self.SECP256R1_PUBKEY,
             AUTH_TYPE_SECP256R1,
             MEMBERS_MERKLE_ROOT,
+            IDENTITY_ATTEST_ROOT,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
             SINGLETON_MOD_HASH,
             POOL_LAUNCHER_ID,
             LAUNCHER_PUZZLE_HASH,

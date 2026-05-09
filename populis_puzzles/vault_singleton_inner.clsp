@@ -28,6 +28,8 @@
    OWNER_PUBKEY
    AUTH_TYPE
    MEMBERS_MERKLE_ROOT
+   IDENTITY_ATTEST_ROOT
+   ZKPASSPORT_BRIDGE_POLICY_HASH
    POOL_SINGLETON_MOD_HASH
    POOL_SINGLETON_LAUNCHER_ID
    POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
@@ -369,6 +371,7 @@
   (defun inner_puzzle_hash_for_updated_keys
         (SINGLETON_STRUCT VAULT_INNER_MOD_HASH
          new_owner_pubkey new_auth_type new_merkle_root
+         IDENTITY_ATTEST_ROOT ZKPASSPORT_BRIDGE_POLICY_HASH
          POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH)
     ;; Reproduce curry_hashes(VAULT_INNER_MOD_HASH, quoted(SINGLETON_STRUCT), quoted(new_owner_pubkey),
     ;;   quoted(new_auth_type), quoted(new_merkle_root), quoted(POOL_SINGLETON_MOD_HASH),
@@ -379,6 +382,8 @@
       (sha256 1 new_owner_pubkey)
       (sha256 1 new_auth_type)
       (sha256 1 new_merkle_root)
+      (sha256 1 IDENTITY_ATTEST_ROOT)
+      (sha256 1 ZKPASSPORT_BRIDGE_POLICY_HASH)
       (sha256 1 POOL_SINGLETON_MOD_HASH)
       (sha256 1 POOL_SINGLETON_LAUNCHER_ID)
       (sha256 1 POOL_SINGLETON_LAUNCHER_PUZZLE_HASH)
@@ -404,6 +409,7 @@
   ;; EIP-712 typehash that covers (new_owner_pubkey, new_auth_type,
   ;; new_merkle_root) and is deferred to the CRIT-2 extension.
   (defun spend_update_keys (SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE MEMBERS_MERKLE_ROOT
+                            IDENTITY_ATTEST_ROOT ZKPASSPORT_BRIDGE_POLICY_HASH
                             POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                             my_id my_inner_puzzlehash my_amount
                             vault_inner_mod_hash new_owner_pubkey new_auth_type new_merkle_root member_proof current_timestamp signature_data)
@@ -417,6 +423,7 @@
         (inner_puzzle_hash_for_updated_keys
           SINGLETON_STRUCT vault_inner_mod_hash
           OWNER_PUBKEY AUTH_TYPE MEMBERS_MERKLE_ROOT
+          IDENTITY_ATTEST_ROOT ZKPASSPORT_BRIDGE_POLICY_HASH
           POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH))
       ;; new_merkle_root must be a valid 32-byte hash
       (is-size-b32 new_merkle_root)
@@ -452,6 +459,7 @@
             (inner_puzzle_hash_for_updated_keys
               SINGLETON_STRUCT vault_inner_mod_hash
               new_owner_pubkey new_auth_type new_merkle_root
+              IDENTITY_ATTEST_ROOT ZKPASSPORT_BRIDGE_POLICY_HASH
               POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH)
             my_amount
             (list my_inner_puzzlehash))
@@ -506,6 +514,7 @@
             ;;   vault_inner_mod_hash, new_owner_pubkey, new_auth_type,
             ;;   new_merkle_root, member_proof, current_timestamp, signature_data
             (spend_update_keys SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE MEMBERS_MERKLE_ROOT
+                               IDENTITY_ATTEST_ROOT ZKPASSPORT_BRIDGE_POLICY_HASH
                                POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                my_id my_inner_puzzlehash my_amount
                                (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))) (f (r (r (r (r (r p)))))) (f (r (r (r (r (r (r p))))))))

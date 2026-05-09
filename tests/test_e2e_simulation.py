@@ -1508,6 +1508,8 @@ VAULT_CURRENT_TIMESTAMP = 1_735_689_600
 
 # Members Merkle root placeholder — one-leaf tree for single-owner vaults
 VAULT_MEMBERS_MERKLE_ROOT_E2E = bytes32(b"\xee" * 32)
+VAULT_IDENTITY_ATTEST_ROOT_E2E = bytes32(bytes.fromhex("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"))
+VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E = bytes32(b"\x00" * 32)
 
 VAULT_SINGLETON_STRUCT_E2E = Program.to(
     (SINGLETON_MOD_HASH, (VAULT_LAUNCHER_ID, SINGLETON_LAUNCHER_HASH))
@@ -1520,6 +1522,8 @@ def curry_vault_bls_e2e() -> Program:
         VAULT_OWNER_PUBKEY_BLS,
         AUTH_TYPE_BLS,
         VAULT_MEMBERS_MERKLE_ROOT_E2E,
+        VAULT_IDENTITY_ATTEST_ROOT_E2E,
+        VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E,
         SINGLETON_MOD_HASH,
         POOL_LAUNCHER_ID,
         SINGLETON_LAUNCHER_HASH,
@@ -1532,6 +1536,8 @@ def curry_vault_secp_e2e() -> Program:
         VAULT_OWNER_PUBKEY_SECP,
         AUTH_TYPE_SECP256K1,
         VAULT_MEMBERS_MERKLE_ROOT_E2E,
+        VAULT_IDENTITY_ATTEST_ROOT_E2E,
+        VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E,
         SINGLETON_MOD_HASH,
         POOL_LAUNCHER_ID,
         SINGLETON_LAUNCHER_HASH,
@@ -1712,6 +1718,8 @@ class TestPhase10VaultCoSpend:
             bytes(48),
             AUTH_TYPE_BLS,
             VAULT_MEMBERS_MERKLE_ROOT_E2E,
+            VAULT_IDENTITY_ATTEST_ROOT_E2E,
+            VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E,
             SINGLETON_MOD_HASH,
             POOL_LAUNCHER_ID,
             SINGLETON_LAUNCHER_HASH,
@@ -1721,6 +1729,8 @@ class TestPhase10VaultCoSpend:
             bytes([1] * 48),
             AUTH_TYPE_BLS,
             VAULT_MEMBERS_MERKLE_ROOT_E2E,
+            VAULT_IDENTITY_ATTEST_ROOT_E2E,
+            VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E,
             SINGLETON_MOD_HASH,
             POOL_LAUNCHER_ID,
             SINGLETON_LAUNCHER_HASH,
@@ -1739,6 +1749,8 @@ class TestPhase10VaultCoSpend:
                 VAULT_OWNER_PUBKEY_BLS,
                 AUTH_TYPE_BLS,
                 VAULT_MEMBERS_MERKLE_ROOT_E2E,
+                VAULT_IDENTITY_ATTEST_ROOT_E2E,
+                VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E,
                 SINGLETON_MOD_HASH,
                 POOL_LAUNCHER_ID,
                 SINGLETON_LAUNCHER_HASH,

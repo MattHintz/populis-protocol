@@ -35,6 +35,7 @@ Usage (EVM / secp256k1):
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import List, Optional
 
 from chia.types.blockchain_format.coin import Coin
@@ -61,6 +62,7 @@ from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
 from chia_rs import G1Element, G2Element, PrivateKey
 
 from populis_puzzles import load_puzzle
+from populis_puzzles.zkpassport_attestation import ZKPASSPORT_EMPTY_ATTEST_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,22 @@ P2_VAULT_MOD: Program = load_puzzle("p2_vault.clsp")
 AUTH_TYPE_BLS = 1        # Chia-native BLS (Goby, Sage)
 AUTH_TYPE_SECP256R1 = 2  # Passkey / WebAuthn secp256r1
 AUTH_TYPE_SECP256K1 = 3  # EVM wallet secp256k1 (EIP-712)
+
+DEFAULT_IDENTITY_ATTEST_ROOT: bytes32 = ZKPASSPORT_EMPTY_ATTEST_ROOT
+DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH: bytes32 = bytes32(b"\x00" * 32)
+
+
+@dataclass(frozen=True)
+class VaultInnerState:
+    singleton_struct: Program
+    owner_pubkey_bytes: bytes
+    auth_type: int
+    members_merkle_root: bytes32
+    identity_attest_root: bytes32
+    zkpassport_bridge_policy_hash: bytes32
+    pool_singleton_mod_hash: bytes32
+    pool_launcher_id: bytes32
+    pool_launcher_puzzle_hash: bytes32
 
 
 # ── Deterministic vault discovery hint (CHIP-22) ──────────────────────────
@@ -145,6 +163,9 @@ def puzzle_for_vault_inner(
     auth_type: int,
     members_merkle_root: bytes32,
     pool_launcher_id: bytes32,
+    *,
+    identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
 ) -> Program:
     """Curry vault_singleton_inner with the owner pubkey, auth_type, merkle root, and pool identity.
 
@@ -165,9 +186,34 @@ def puzzle_for_vault_inner(
         owner_pubkey_bytes,
         auth_type,
         members_merkle_root,
+        identity_attest_root,
+        zkpassport_bridge_policy_hash,
         SINGLETON_MOD_HASH,         # POOL_SINGLETON_MOD_HASH
         pool_launcher_id,            # POOL_SINGLETON_LAUNCHER_ID
         SINGLETON_LAUNCHER_HASH,     # POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+    )
+
+
+def parse_vault_inner_puzzle(curried_inner_puzzle: Program) -> VaultInnerState:
+    uncurried = curried_inner_puzzle.uncurry()
+    if uncurried is None:
+        raise ValueError("puzzle is not curried; cannot parse state")
+    mod, args = uncurried
+    if bytes32(mod.get_tree_hash()) != bytes32(VAULT_INNER_MOD.get_tree_hash()):
+        raise ValueError("puzzle reveal does not instantiate vault_singleton_inner.clsp")
+    args_list = list(args.as_iter())
+    if len(args_list) != 9:
+        raise ValueError(f"vault_singleton_inner expects 9 curried args, got {len(args_list)}")
+    return VaultInnerState(
+        singleton_struct=args_list[0],
+        owner_pubkey_bytes=bytes(args_list[1].as_atom()),
+        auth_type=int(args_list[2].as_int()),
+        members_merkle_root=bytes32(args_list[3].as_atom()),
+        identity_attest_root=bytes32(args_list[4].as_atom()),
+        zkpassport_bridge_policy_hash=bytes32(args_list[5].as_atom()),
+        pool_singleton_mod_hash=bytes32(args_list[6].as_atom()),
+        pool_launcher_id=bytes32(args_list[7].as_atom()),
+        pool_launcher_puzzle_hash=bytes32(args_list[8].as_atom()),
     )
 
 
@@ -177,6 +223,9 @@ def puzzle_for_vault_full(
     auth_type: int,
     members_merkle_root: bytes32,
     pool_launcher_id: bytes32,
+    *,
+    identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
 ) -> Program:
     """Return the full singleton-wrapped vault puzzle.
 
@@ -186,7 +235,13 @@ def puzzle_for_vault_full(
     the singleton top layer (observed as "= used on list" at runtime).
     """
     inner = puzzle_for_vault_inner(
-        vault_launcher_id, owner_pubkey_bytes, auth_type, members_merkle_root, pool_launcher_id
+        vault_launcher_id,
+        owner_pubkey_bytes,
+        auth_type,
+        members_merkle_root,
+        pool_launcher_id,
+        identity_attest_root=identity_attest_root,
+        zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
     )
     return puzzle_for_singleton(vault_launcher_id, inner)
 
@@ -503,6 +558,9 @@ def build_vault_deposit_spend(
     current_timestamp: int,
     lineage_proof: LineageProof,
     signature_data: Optional[bytes] = None,
+    *,
+    identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
 ) -> CoinSpend:
     """Build a CoinSpend for a vault 'o' (deposit to pool) operation.
 
@@ -525,6 +583,8 @@ def build_vault_deposit_spend(
     inner_puzzle = puzzle_for_vault_inner(
         vault_launcher_id, owner_pubkey_bytes, auth_type,
         members_merkle_root, pool_launcher_id,
+        identity_attest_root=identity_attest_root,
+        zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
     )
     full_puzzle = puzzle_for_singleton(vault_launcher_id, inner_puzzle)
     my_id = vault_coin.name()
@@ -554,6 +614,9 @@ def build_vault_receive_spend(
     current_timestamp: int,
     lineage_proof: LineageProof,
     signature_data: Optional[bytes] = None,
+    *,
+    identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
 ) -> CoinSpend:
     """Build a CoinSpend for a vault 'i' (receive from pool) operation.
 
@@ -574,6 +637,8 @@ def build_vault_receive_spend(
     inner_puzzle = puzzle_for_vault_inner(
         vault_launcher_id, owner_pubkey_bytes, auth_type,
         members_merkle_root, pool_launcher_id,
+        identity_attest_root=identity_attest_root,
+        zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
     )
     full_puzzle = puzzle_for_singleton(vault_launcher_id, inner_puzzle)
     my_id = vault_coin.name()
@@ -604,6 +669,9 @@ def build_create_vault_bundle(
     members_merkle_root: bytes32,
     pool_launcher_id: bytes32,
     fee: int = 0,
+    *,
+    identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
 ) -> tuple[SpendBundle, bytes32]:
     """Build an *unsigned* spend bundle that deploys a vault singleton.
 
@@ -624,7 +692,13 @@ def build_create_vault_bundle(
     vault_launcher_id: bytes32 = launcher_coin.name()
 
     vault_full_puzzle = puzzle_for_vault_full(
-        vault_launcher_id, owner_pubkey_bytes, auth_type, members_merkle_root, pool_launcher_id
+        vault_launcher_id,
+        owner_pubkey_bytes,
+        auth_type,
+        members_merkle_root,
+        pool_launcher_id,
+        identity_attest_root=identity_attest_root,
+        zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
     )
     vault_puzzle_hash = vault_full_puzzle.get_tree_hash()
 
@@ -679,6 +753,8 @@ class VaultDriver:
         pool_launcher_id: bytes32,
         fee: int = 0,
         parent_puzzle: Optional[Program] = None,
+        identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+        zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
     ) -> dict:
         """Build an unsigned vault creation bundle for client-side signing.
 
@@ -717,7 +793,9 @@ class VaultDriver:
 
         unsigned_bundle, vault_launcher_id = build_create_vault_bundle(
             parent_coin, parent_puzzle, owner_pubkey_bytes, auth_type,
-            members_merkle_root, pool_launcher_id, fee
+            members_merkle_root, pool_launcher_id, fee,
+            identity_attest_root=identity_attest_root,
+            zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
         )
 
         coin_spends_json = [
@@ -772,10 +850,19 @@ class VaultDriver:
         auth_type: int,
         members_merkle_root: bytes32,
         pool_launcher_id: bytes32,
+        *,
+        identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+        zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
     ) -> bytes32:
         """Compute the puzzle hash of the vault singleton."""
         return puzzle_for_vault_full(
-            vault_launcher_id, owner_pubkey_bytes, auth_type, members_merkle_root, pool_launcher_id
+            vault_launcher_id,
+            owner_pubkey_bytes,
+            auth_type,
+            members_merkle_root,
+            pool_launcher_id,
+            identity_attest_root=identity_attest_root,
+            zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
         ).get_tree_hash()
 
     def p2_vault_puzzle_hash(self, vault_launcher_id: bytes32) -> bytes32:
