@@ -1510,6 +1510,8 @@ VAULT_CURRENT_TIMESTAMP = 1_735_689_600
 VAULT_MEMBERS_MERKLE_ROOT_E2E = bytes32(b"\xee" * 32)
 VAULT_IDENTITY_ATTEST_ROOT_E2E = bytes32(bytes.fromhex("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"))
 VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E = bytes32(b"\x00" * 32)
+VAULT_ATTESTATION_LEAF_HASH_E2E = bytes32(b"\x44" * 32)
+VAULT_ATTESTATION_PROOF_E2E = Program.to((0, []))
 
 VAULT_SINGLETON_STRUCT_E2E = Program.to(
     (SINGLETON_MOD_HASH, (VAULT_LAUNCHER_ID, SINGLETON_LAUNCHER_HASH))
@@ -1692,13 +1694,34 @@ class TestPhase10VaultCoSpend:
 
     def test_vault_accept_offer_agg_sig_bound_to_token_amount(self):
         """AGG_SIG_ME message for 'a' is bound to token_amount — prevents price manipulation."""
+        vault_bls = VAULT_INNER_MOD.curry(
+            VAULT_SINGLETON_STRUCT_E2E,
+            VAULT_OWNER_PUBKEY_BLS,
+            AUTH_TYPE_BLS,
+            VAULT_MEMBERS_MERKLE_ROOT_E2E,
+            VAULT_ATTESTATION_LEAF_HASH_E2E,
+            VAULT_ZKPASSPORT_BRIDGE_POLICY_HASH_E2E,
+            SINGLETON_MOD_HASH,
+            POOL_LAUNCHER_ID,
+            SINGLETON_LAUNCHER_HASH,
+        )
+        vault_inner_puzhash = vault_bls.get_tree_hash()
+
         def run_msg(token_amount):
             sol = Program.to([
-                VAULT_COIN_ID, self.vault_inner_puzhash, 1,
+                VAULT_COIN_ID, vault_inner_puzhash, 1,
                 0x61,  # 'a'
-                [DEED_LAUNCHER_ID, token_amount, self.pool_inner_ph, VAULT_CURRENT_TIMESTAMP, None],
+                [
+                    DEED_LAUNCHER_ID,
+                    token_amount,
+                    self.pool_inner_ph,
+                    VAULT_ATTESTATION_LEAF_HASH_E2E,
+                    VAULT_ATTESTATION_PROOF_E2E,
+                    VAULT_CURRENT_TIMESTAMP,
+                    None,
+                ],
             ])
-            conds = self.vault_bls.run(sol).as_python()
+            conds = vault_bls.run(sol).as_python()
             return [c for c in conds if c[0] == bytes([50])][0][2]
 
         msg_100 = run_msg(100_000)

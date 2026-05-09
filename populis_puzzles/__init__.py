@@ -85,7 +85,7 @@ FROZEN_CHECKSUM: Optional[str] = (
     # PUZZLE_FILENAMES extends the canonical order, so the all-puzzle
     # checksum changes even though no existing puzzle's bytecode did.
     # Mod hash for the new file is pinned in mint_proposal_v2_driver.py.
-    "ca09fff14bda9e886a93065e1674b6a7054523513b118ac1322c72b5231c933a"
+    "fa8bd3982d55431cf0311ab555cc20916a12397d9c624c2caae1887c05f67fc7"
 )
 
 # ── Cache ──

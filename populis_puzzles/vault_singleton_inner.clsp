@@ -309,10 +309,10 @@
   ;; SPEND CASE 'a' — ACCEPT POOL OFFER (secondary purchase)
   ;; p = (deed_launcher_id token_amount pool_inner_puzhash current_timestamp signature_data)
   ;; current_timestamp: Unix seconds supplied by the spender; pinned to the block via time_bound_conditions.
-  (defun spend_accept_offer (SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE POOL_SINGLETON_MOD_HASH
+  (defun spend_accept_offer (SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE IDENTITY_ATTEST_ROOT POOL_SINGLETON_MOD_HASH
                              POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                              my_id my_inner_puzzlehash my_amount
-                             deed_launcher_id token_amount pool_inner_puzhash current_timestamp signature_data)
+                             deed_launcher_id token_amount pool_inner_puzhash attestation_leaf_hash attestation_proof current_timestamp signature_data)
     (assert
       (is-size-b32 deed_launcher_id)
       (is-uint64 token_amount)
@@ -323,6 +323,9 @@
       ;; real deployed pool coin, turning the ASSERT_PUZZLE_ANNOUNCEMENT into an
       ;; unspendable trap.  The 32-byte zero atom is the sha256 of nothing: reject it.
       (not (= pool_inner_puzhash 0x0000000000000000000000000000000000000000000000000000000000000000))
+      (not (= IDENTITY_ATTEST_ROOT ZKPASSPORT_EMPTY_ATTEST_ROOT))
+      (is-size-b32 attestation_leaf_hash)
+      (= IDENTITY_ATTEST_ROOT (simplify_merkle_proof_after_leaf attestation_leaf_hash attestation_proof))
       (is-uint64 current_timestamp)
       (c
         ;; HIGH-5 partial: include my_id in the BLS AGG_SIG_ME message.
@@ -568,10 +571,10 @@
                                  my_id my_inner_puzzlehash my_amount
                                  (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))))
         (if (= spend_case SPEND_ACCEPT_OFFER)
-          (spend_accept_offer SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE POOL_SINGLETON_MOD_HASH
+          (spend_accept_offer SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE IDENTITY_ATTEST_ROOT POOL_SINGLETON_MOD_HASH
                               POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                               my_id my_inner_puzzlehash my_amount
-                              (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))))
+                              (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))) (f (r (r (r (r (r p)))))) (f (r (r (r (r (r (r p))))))))
           (if (= spend_case SPEND_UPDATE_KEYS)
             ;; LOW-11 fix: 'k' solution shape is now 7 fields:
             ;;   vault_inner_mod_hash, new_owner_pubkey, new_auth_type,

@@ -54,6 +54,8 @@ SECP_OWNER_PUBKEY = b"\x02" + bytes(32)
 MEMBERS_MERKLE_ROOT = bytes32(b"\xee" * 32)
 IDENTITY_ATTEST_ROOT = bytes32(bytes.fromhex("4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a"))
 ZKPASSPORT_BRIDGE_POLICY_HASH = bytes32(b"\x00" * 32)
+ATTESTATION_LEAF_HASH = bytes32(b"\x44" * 32)
+ATTESTATION_PROOF = Program.to((0, []))
 
 VAULT_SINGLETON_STRUCT = Program.to(
     (SINGLETON_MOD_HASH, (VAULT_LAUNCHER_ID, LAUNCHER_PUZZLE_HASH))
@@ -327,15 +329,38 @@ class TestVaultBLSReceiveFromPool:
 class TestVaultBLSAcceptOffer:
     """BLS path — SPEND CASE 'a': accept pool offer."""
 
+    def _curried_enrolled(self) -> Program:
+        return VAULT_INNER_MOD.curry(
+            VAULT_SINGLETON_STRUCT,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            ATTESTATION_LEAF_HASH,
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
+            SINGLETON_MOD_HASH,
+            POOL_LAUNCHER_ID,
+            LAUNCHER_PUZZLE_HASH,
+        )
+
+    def _offer_params(self, token_amount: int = 100_000):
+        return [
+            DEED_LAUNCHER_ID,
+            token_amount,
+            POOL_INNER_PUZHASH,
+            ATTESTATION_LEAF_HASH,
+            ATTESTATION_PROOF,
+            CURRENT_TIMESTAMP,
+            None,
+        ]
+
     def test_accept_offer_agg_sig_present(self):
-        curried = curry_vault_bls()
+        curried = self._curried_enrolled()
         my_id = bytes32(b"\x11" * 32)
         my_inner_puzhash = curried.get_tree_hash()
-        token_amount = 100_000
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_ACCEPT_OFFER,
-            [DEED_LAUNCHER_ID, token_amount, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
+            self._offer_params(),
         ])
         conds = curried.run(sol).as_python()
         # AGG_SIG_ME, ASSERT_PUZZLE_ANN, CREATE_COIN, REMARK,
@@ -345,7 +370,51 @@ class TestVaultBLSAcceptOffer:
         assert extract_cond(conds, OP_AGG_SIG_ME)[1] == BLS_OWNER_PUBKEY
 
     def test_accept_offer_asserts_pool_announcement(self):
+        curried = self._curried_enrolled()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_ACCEPT_OFFER,
+            self._offer_params(),
+        ])
+        conds = curried.run(sol).as_python()
+        assert extract_cond(conds, OP_ASSERT_PUZZLE_ANN) is not None
+
+    def test_accept_offer_rejects_empty_identity_root(self):
         curried = curry_vault_bls()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_ACCEPT_OFFER,
+            self._offer_params(),
+        ])
+        with pytest.raises(Exception):
+            curried.run(sol)
+
+    def test_accept_offer_rejects_wrong_attestation_proof(self):
+        curried = self._curried_enrolled()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_ACCEPT_OFFER,
+            [
+                DEED_LAUNCHER_ID,
+                100_000,
+                POOL_INNER_PUZHASH,
+                bytes32(b"\x45" * 32),
+                ATTESTATION_PROOF,
+                CURRENT_TIMESTAMP,
+                None,
+            ],
+        ])
+        with pytest.raises(Exception):
+            curried.run(sol)
+
+    def test_accept_offer_rejects_missing_attestation_proof_shape(self):
+        curried = self._curried_enrolled()
         my_id = bytes32(b"\x11" * 32)
         my_inner_puzhash = curried.get_tree_hash()
         sol = Program.to([
@@ -353,8 +422,8 @@ class TestVaultBLSAcceptOffer:
             SPEND_ACCEPT_OFFER,
             [DEED_LAUNCHER_ID, 100_000, POOL_INNER_PUZHASH, CURRENT_TIMESTAMP, None],
         ])
-        conds = curried.run(sol).as_python()
-        assert extract_cond(conds, OP_ASSERT_PUZZLE_ANN) is not None
+        with pytest.raises(Exception):
+            curried.run(sol)
 
 
 class TestVaultSecpPath:
