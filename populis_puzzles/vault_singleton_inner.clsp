@@ -498,7 +498,7 @@
                                 IDENTITY_ATTEST_ROOT ZKPASSPORT_BRIDGE_POLICY_HASH
                                 POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                 my_id my_inner_puzzlehash my_amount
-                                vault_inner_mod_hash new_identity_attest_root bridge_parent_id bridge_amount current_timestamp)
+                                vault_inner_mod_hash new_identity_attest_root bridge_parent_id bridge_amount current_timestamp signature_data)
     (assert
       (is-size-b32 vault_inner_mod_hash)
       (= my_inner_puzzlehash
@@ -515,25 +515,28 @@
       (> bridge_amount 0)
       (is-uint64 current_timestamp)
       (c
-        (list ASSERT_COIN_ANNOUNCEMENT
-          (sha256
-            (sha256 bridge_parent_id ZKPASSPORT_BRIDGE_POLICY_HASH bridge_amount)
-            (concat PROTOCOL_PREFIX
-              (zkpassport_bridge_message SINGLETON_STRUCT new_identity_attest_root ZKPASSPORT_BRIDGE_POLICY_HASH))))
+        (authenticate_spend_oi AUTH_TYPE OWNER_PUBKEY SPEND_UPDATE_IDENTITY new_identity_attest_root my_id signature_data)
         (c
-          (list CREATE_COIN
-            (inner_puzzle_hash_for_updated_keys
-              SINGLETON_STRUCT vault_inner_mod_hash
-              OWNER_PUBKEY AUTH_TYPE MEMBERS_MERKLE_ROOT
-              new_identity_attest_root ZKPASSPORT_BRIDGE_POLICY_HASH
-              POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH)
-            my_amount
-            (list my_inner_puzzlehash))
+          (list ASSERT_COIN_ANNOUNCEMENT
+            (sha256
+              (sha256 bridge_parent_id ZKPASSPORT_BRIDGE_POLICY_HASH bridge_amount)
+              (concat PROTOCOL_PREFIX
+                (zkpassport_bridge_message SINGLETON_STRUCT new_identity_attest_root ZKPASSPORT_BRIDGE_POLICY_HASH))))
           (c
-            (list REMARK PROTOCOL_PREFIX SPEND_UPDATE_IDENTITY new_identity_attest_root)
-            (merge-lists
-              (time_bound_conditions current_timestamp)
-              (base_conditions SINGLETON_STRUCT my_id my_amount my_inner_puzzlehash)
+            (list CREATE_COIN
+              (inner_puzzle_hash_for_updated_keys
+                SINGLETON_STRUCT vault_inner_mod_hash
+                OWNER_PUBKEY AUTH_TYPE MEMBERS_MERKLE_ROOT
+                new_identity_attest_root ZKPASSPORT_BRIDGE_POLICY_HASH
+                POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH)
+              my_amount
+              (list my_inner_puzzlehash))
+            (c
+              (list REMARK PROTOCOL_PREFIX SPEND_UPDATE_IDENTITY new_identity_attest_root)
+              (merge-lists
+                (time_bound_conditions current_timestamp)
+                (base_conditions SINGLETON_STRUCT my_id my_amount my_inner_puzzlehash)
+              )
             )
           )
         )
@@ -589,7 +592,7 @@
                                      IDENTITY_ATTEST_ROOT ZKPASSPORT_BRIDGE_POLICY_HASH
                                      POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                      my_id my_inner_puzzlehash my_amount
-                                     (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))))
+                                     (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))) (f (r (r (r (r (r p)))))))
               (x) ;; unknown spend case
             )
           )

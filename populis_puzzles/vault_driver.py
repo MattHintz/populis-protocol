@@ -10,7 +10,7 @@ Supported auth types (curried into the vault puzzle as AUTH_TYPE):
   AUTH_TYPE_BLS       (1) — Chia-native BLS wallet (Goby, Sage via WalletConnect)
                             OWNER_PUBKEY: 48-byte BLS G1Element
   AUTH_TYPE_SECP256R1 (2) — Passkey / WebAuthn (secp256r1)
-                            OWNER_PUBKEY: 33-byte compressed secp256r1 pubkey
+                            OWNER_PUBKEY: 65-byte uncompressed secp256r1 pubkey
   AUTH_TYPE_SECP256K1 (3) — EVM wallet (MetaMask, Coinbase Wallet) via EIP-712
                             OWNER_PUBKEY: 33-byte compressed secp256k1 pubkey
 
@@ -80,6 +80,30 @@ DEFAULT_IDENTITY_ATTEST_ROOT: bytes32 = ZKPASSPORT_EMPTY_ATTEST_ROOT
 DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH: bytes32 = bytes32(b"\x00" * 32)
 
 
+def validate_owner_pubkey_for_auth_type(owner_pubkey: bytes, auth_type: int) -> bytes:
+    if not isinstance(owner_pubkey, (bytes, bytearray)):
+        raise TypeError("owner_pubkey must be bytes")
+    owner = bytes(owner_pubkey)
+    if auth_type == AUTH_TYPE_BLS:
+        if len(owner) != 48:
+            raise ValueError(f"BLS owner_pubkey must be 48 bytes, got {len(owner)}")
+    elif auth_type == AUTH_TYPE_SECP256R1:
+        if len(owner) != 65 or owner[0] != 0x04:
+            raise ValueError(
+                "secp256r1 owner_pubkey must be 65 bytes uncompressed "
+                f"(0x04 || X || Y), got {len(owner)} bytes"
+            )
+    elif auth_type == AUTH_TYPE_SECP256K1:
+        if len(owner) != 33 or owner[0] not in (0x02, 0x03):
+            raise ValueError(
+                "secp256k1 owner_pubkey must be 33 bytes compressed "
+                f"(0x02/0x03 || X), got {len(owner)} bytes"
+            )
+    else:
+        raise ValueError(f"Unsupported auth_type: {auth_type}")
+    return owner
+
+
 @dataclass(frozen=True)
 class VaultInnerState:
     singleton_struct: Program
@@ -112,7 +136,7 @@ def vault_discovery_hint(auth_type: int, owner_pubkey: bytes) -> bytes32:
 
     Args:
         auth_type: AUTH_TYPE_BLS / AUTH_TYPE_SECP256R1 / AUTH_TYPE_SECP256K1
-        owner_pubkey: the raw owner pubkey bytes (48 for BLS, 33 for secp).
+        owner_pubkey: the raw owner pubkey bytes for the selected auth type.
 
     Returns:
         32-byte hint to attach as the first memo of the launcher CREATE_COIN.
@@ -178,6 +202,7 @@ def puzzle_for_vault_inner(
         members_merkle_root: 32-byte Merkle root of authorised public keys.
             Single-key vaults pass the one-leaf Merkle root: sha256(0x01 + owner_pubkey_bytes).
     """
+    owner_pubkey_bytes = validate_owner_pubkey_for_auth_type(owner_pubkey_bytes, auth_type)
     singleton_struct = Program.to(
         (SINGLETON_MOD_HASH, (vault_launcher_id, SINGLETON_LAUNCHER_HASH))
     )
@@ -557,6 +582,7 @@ def _inner_solution_for_update_identity(
     bridge_parent_id: bytes32,
     bridge_amount: int,
     current_timestamp: int,
+    signature_data: Optional[bytes],
 ) -> Program:
     return Program.to([
         bytes(my_id),
@@ -569,6 +595,7 @@ def _inner_solution_for_update_identity(
             bytes(bridge_parent_id),
             int(bridge_amount),
             int(current_timestamp),
+            signature_data if signature_data is not None else b"",
         ],
     ])
 
@@ -695,6 +722,7 @@ def build_vault_update_identity_spend(
     bridge_amount: int,
     current_timestamp: int,
     lineage_proof: LineageProof,
+    signature_data: Optional[bytes] = None,
     *,
     identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
     zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
@@ -725,6 +753,7 @@ def build_vault_update_identity_spend(
         bridge_parent_id=bridge_parent_id,
         bridge_amount=bridge_amount,
         current_timestamp=current_timestamp,
+        signature_data=signature_data,
     )
     full_solution = solution_for_singleton(
         lineage_proof, uint64(vault_coin.amount), inner_solution,
@@ -756,13 +785,14 @@ def build_create_vault_bundle(
     Args:
         parent_coin:          XCH coin funding the launcher (≥ 1 + fee mojos).
         parent_puzzle:        Puzzle for parent_coin.
-        owner_pubkey_bytes:   Raw pubkey bytes (48-byte BLS or 33/65-byte secp).
+        owner_pubkey_bytes:   Raw pubkey bytes (48-byte BLS, 65-byte r1, or 33-byte k1).
         auth_type:            AUTH_TYPE_BLS, AUTH_TYPE_SECP256R1, or AUTH_TYPE_SECP256K1.
         members_merkle_root:  32-byte Merkle root of authorised keys.
                               For single-key vaults use one_leaf_merkle_root(owner_pubkey_bytes).
         pool_launcher_id:     The Populis pool's launcher ID.
         fee:                  Network fee in mojos.
     """
+    owner_pubkey_bytes = validate_owner_pubkey_for_auth_type(owner_pubkey_bytes, auth_type)
     launcher_coin = launcher_coin_for_parent(parent_coin)
     vault_launcher_id: bytes32 = launcher_coin.name()
 
@@ -848,7 +878,7 @@ class VaultDriver:
 
         Args:
             parent_coin:          Unspent XCH coin (≥ 1 + fee mojos).
-            owner_pubkey_bytes:   48-byte BLS G1 or 33/65-byte secp pubkey.
+            owner_pubkey_bytes:   48-byte BLS G1, 65-byte r1, or 33-byte k1 pubkey.
             auth_type:            AUTH_TYPE_BLS / AUTH_TYPE_SECP256R1 / AUTH_TYPE_SECP256K1.
             members_merkle_root:  32-byte Merkle root. Use one_leaf_merkle_root() for single-key.
             pool_launcher_id:     Populis pool launcher ID.
@@ -856,6 +886,7 @@ class VaultDriver:
             parent_puzzle:        Required for secp auth types; ignored for BLS
                                   (derived automatically from owner_pubkey_bytes).
         """
+        owner_pubkey_bytes = validate_owner_pubkey_for_auth_type(owner_pubkey_bytes, auth_type)
         if auth_type == AUTH_TYPE_BLS:
             owner_pk = G1Element.from_bytes(owner_pubkey_bytes)
             parent_puzzle = puzzle_for_pk(owner_pk)

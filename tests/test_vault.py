@@ -792,6 +792,35 @@ class TestVaultDriverHelpers:
         assert inner is not None
         assert len(bytes(inner.get_tree_hash())) == 32
 
+    def test_puzzle_for_vault_inner_rejects_compressed_secp256r1_pubkey(self):
+        from populis_puzzles.vault_driver import (
+            puzzle_for_vault_inner, AUTH_TYPE_SECP256R1,
+        )
+        with pytest.raises(ValueError, match="65 bytes uncompressed"):
+            puzzle_for_vault_inner(
+                VAULT_LAUNCHER_ID,
+                b"\x02" + bytes(32),
+                AUTH_TYPE_SECP256R1,
+                MEMBERS_MERKLE_ROOT,
+                POOL_LAUNCHER_ID,
+            )
+
+    def test_build_create_vault_bundle_rejects_compressed_secp256r1_pubkey(self):
+        from chia.types.blockchain_format.coin import Coin
+        from chia_rs.sized_ints import uint64
+        from populis_puzzles.vault_driver import (
+            build_create_vault_bundle, AUTH_TYPE_SECP256R1,
+        )
+        with pytest.raises(ValueError, match="65 bytes uncompressed"):
+            build_create_vault_bundle(
+                Coin(bytes32(b"\x01" * 32), bytes32(b"\x02" * 32), uint64(2)),
+                Program.to(1),
+                b"\x03" + bytes(32),
+                AUTH_TYPE_SECP256R1,
+                MEMBERS_MERKLE_ROOT,
+                POOL_LAUNCHER_ID,
+            )
+
     def test_puzzle_for_vault_inner_defaults_identity_state(self):
         from populis_puzzles.vault_driver import (
             DEFAULT_IDENTITY_ATTEST_ROOT,
@@ -1023,9 +1052,12 @@ class TestVaultUpdateIdentity:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_UPDATE_IDENTITY,
-            [vault_mod_hash, new_root, bridge_parent_id, bridge_amount, CURRENT_TIMESTAMP],
+            [vault_mod_hash, new_root, bridge_parent_id, bridge_amount, CURRENT_TIMESTAMP, None],
         ])
         conds = curried.run(sol).as_python()
+        agg_sig = extract_cond(conds, OP_AGG_SIG_ME)
+        assert agg_sig[1] == BLS_OWNER_PUBKEY
+        assert agg_sig[2] == bytes(Program.to([b"z", new_root, my_id]).get_tree_hash())
         bridge_msg = compute_attestation_bridge_message(
             vault_launcher_id=VAULT_LAUNCHER_ID,
             attestation_root=new_root,
@@ -1048,6 +1080,18 @@ class TestVaultUpdateIdentity:
         create_coins = [c for c in conds if c[0] == OP_CREATE_COIN]
         assert create_coins == [[OP_CREATE_COIN, bytes(expected_inner), b"\x01", [bytes(my_inner_puzhash)]]]
 
+    def test_update_identity_rejects_missing_current_owner_authorization(self):
+        curried = self._curry_with_identity_root()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_UPDATE_IDENTITY,
+            [VAULT_INNER_MOD.get_tree_hash(), bytes32(b"\x77" * 32), bytes32(b"\x33" * 32), 1, CURRENT_TIMESTAMP],
+        ])
+        with pytest.raises(Exception):
+            curried.run(sol)
+
     def test_update_identity_rejects_second_enrollment(self):
         current_root = bytes32(b"\x66" * 32)
         curried = self._curry_with_identity_root(current_root)
@@ -1056,7 +1100,7 @@ class TestVaultUpdateIdentity:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_UPDATE_IDENTITY,
-            [VAULT_INNER_MOD.get_tree_hash(), bytes32(b"\x77" * 32), bytes32(b"\x33" * 32), 1, CURRENT_TIMESTAMP],
+            [VAULT_INNER_MOD.get_tree_hash(), bytes32(b"\x77" * 32), bytes32(b"\x33" * 32), 1, CURRENT_TIMESTAMP, None],
         ])
         with pytest.raises(Exception):
             curried.run(sol)
@@ -1068,7 +1112,7 @@ class TestVaultUpdateIdentity:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_UPDATE_IDENTITY,
-            [VAULT_INNER_MOD.get_tree_hash(), IDENTITY_ATTEST_ROOT, bytes32(b"\x33" * 32), 1, CURRENT_TIMESTAMP],
+            [VAULT_INNER_MOD.get_tree_hash(), IDENTITY_ATTEST_ROOT, bytes32(b"\x33" * 32), 1, CURRENT_TIMESTAMP, None],
         ])
         with pytest.raises(Exception):
             curried.run(sol)
@@ -1080,7 +1124,7 @@ class TestVaultUpdateIdentity:
         sol = Program.to([
             my_id, my_inner_puzhash, 1,
             SPEND_UPDATE_IDENTITY,
-            [VAULT_INNER_MOD.get_tree_hash(), bytes32(b"\x77" * 32), bytes32(b"\x33" * 32), 0, CURRENT_TIMESTAMP],
+            [VAULT_INNER_MOD.get_tree_hash(), bytes32(b"\x77" * 32), bytes32(b"\x33" * 32), 0, CURRENT_TIMESTAMP, None],
         ])
         with pytest.raises(Exception):
             curried.run(sol)
