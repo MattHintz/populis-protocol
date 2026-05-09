@@ -65,6 +65,7 @@ PUZZLE_FILENAMES = (
     # and the puzzle docstring for the binding-hash construction that
     # blocks signature replay across transitions / proposals.
     "mint_proposal_inner_v2.clsp",
+    "zkpassport_bridge_message.clsp",
 )
 
 # ── Frozen checksum — update after every intentional puzzle change ──
@@ -80,12 +81,12 @@ PUZZLE_FILENAMES = (
 # All four A.x puzzles' mod hashes therefore changed; the new values
 # are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
-    # 2026-05-05: Phase 9-Hermes-D added mint_proposal_inner_v2.clsp
-    # (the MIPS-pluggable mint-proposal puzzle).  Adding a puzzle to
-    # PUZZLE_FILENAMES extends the canonical order, so the all-puzzle
-    # checksum changes even though no existing puzzle's bytecode did.
-    # Mod hash for the new file is pinned in mint_proposal_v2_driver.py.
-    "fa8bd3982d55431cf0311ab555cc20916a12397d9c624c2caae1887c05f67fc7"
+    # 2026-05-09: Brick 10 added zkpassport_bridge_message.clsp.
+    # Adding a puzzle to PUZZLE_FILENAMES extends the canonical order,
+    # so the all-puzzle checksum changes even though no existing
+    # puzzle's bytecode did.
+    # The new bridge policy hash is derived by zkpassport_bridge_driver.py.
+    "9a8d790ba7315aba07aca46ac8f683b027b7a8a3d5999ea3b50791e129d69f73"
 )
 
 # ── Cache ──

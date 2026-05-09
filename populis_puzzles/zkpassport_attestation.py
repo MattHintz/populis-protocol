@@ -127,6 +127,50 @@ def compute_attestation_bridge_message(
     )
 
 
+def compute_validator_bridge_message(
+    *,
+    vault_launcher_id: bytes32,
+    attestation_root: bytes32,
+    bridge_policy_hash: bytes32,
+    bridge_message: bytes32,
+    attestation_leaf_hash: bytes32,
+    scoped_nullifier: bytes32,
+    nullifier_type: int,
+    service_scope_hash: bytes32,
+    service_subscope_hash: bytes32,
+    proof_timestamp: int,
+    policy_version: int = ZKPASSPORT_POLICY_VERSION,
+) -> bytes32:
+    _require_bytes32("vault_launcher_id", vault_launcher_id)
+    _require_bytes32("attestation_root", attestation_root)
+    _require_bytes32("bridge_policy_hash", bridge_policy_hash)
+    _require_bytes32("bridge_message", bridge_message)
+    _require_bytes32("attestation_leaf_hash", attestation_leaf_hash)
+    _require_bytes32("scoped_nullifier", scoped_nullifier)
+    _require_bytes32("service_scope_hash", service_scope_hash)
+    _require_bytes32("service_subscope_hash", service_subscope_hash)
+    _validate_uint16("policy_version", policy_version)
+    _validate_uint16("nullifier_type", nullifier_type)
+    _validate_uint64("proof_timestamp", proof_timestamp)
+    return bytes32(
+        Program.to(
+            [
+                _uint_to_bytes32(policy_version),
+                vault_launcher_id,
+                attestation_root,
+                bridge_policy_hash,
+                bridge_message,
+                attestation_leaf_hash,
+                scoped_nullifier,
+                _uint_to_bytes32(nullifier_type),
+                service_scope_hash,
+                service_subscope_hash,
+                _uint_to_bytes32(proof_timestamp),
+            ]
+        ).get_tree_hash()
+    )
+
+
 def verify_merkle_proof(
     *,
     leaf_hash: bytes32,
@@ -160,6 +204,10 @@ def _combine_nodes(left: bytes32, right: bytes32) -> bytes32:
     return bytes32(hashlib.sha256(b"\x02" + bytes(left) + bytes(right)).digest())
 
 
+def _uint_to_bytes32(value: int) -> bytes:
+    return int(value).to_bytes(32, "big")
+
+
 def _coerce_bytes32(name: str, value: bytes) -> bytes32:
     _require_bytes32(name, value)
     return bytes32(value)
@@ -189,6 +237,7 @@ __all__ = [
     "compute_attestation_bridge_message",
     "compute_attestation_leaf",
     "compute_attestation_root",
+    "compute_validator_bridge_message",
     "compute_vault_subscope",
     "verify_merkle_proof",
 ]
