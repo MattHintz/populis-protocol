@@ -492,6 +492,7 @@ SPEND_DEPOSIT_TO_POOL: int = 0x6F   # b'o'
 SPEND_RECEIVE_FROM_POOL: int = 0x69  # b'i'
 SPEND_ACCEPT_OFFER: int = 0x61      # b'a' (BLS-only; secp deferred — see CRIT-2 residual)
 SPEND_UPDATE_KEYS: int = 0x6B       # b'k' (BLS-only; secp deferred)
+SPEND_UPDATE_IDENTITY: int = 0x7A
 
 
 def _inner_solution_for_deposit(
@@ -543,6 +544,31 @@ def _inner_solution_for_receive(
             bytes(p2_vault_coin_id),
             int(current_timestamp),
             signature_data if signature_data is not None else b"",
+        ],
+    ])
+
+
+def _inner_solution_for_update_identity(
+    my_id: bytes32,
+    my_inner_puzhash: bytes32,
+    my_amount: int,
+    vault_inner_mod_hash: bytes32,
+    new_identity_attest_root: bytes32,
+    bridge_parent_id: bytes32,
+    bridge_amount: int,
+    current_timestamp: int,
+) -> Program:
+    return Program.to([
+        bytes(my_id),
+        bytes(my_inner_puzhash),
+        int(my_amount),
+        SPEND_UPDATE_IDENTITY,
+        [
+            bytes(vault_inner_mod_hash),
+            bytes(new_identity_attest_root),
+            bytes(bridge_parent_id),
+            int(bridge_amount),
+            int(current_timestamp),
         ],
     ])
 
@@ -650,6 +676,55 @@ def build_vault_receive_spend(
         p2_vault_coin_id=p2_vault_coin_id,
         current_timestamp=current_timestamp,
         signature_data=signature_data,
+    )
+    full_solution = solution_for_singleton(
+        lineage_proof, uint64(vault_coin.amount), inner_solution,
+    )
+    return make_spend(vault_coin, full_puzzle, full_solution)
+
+
+def build_vault_update_identity_spend(
+    vault_coin: Coin,
+    vault_launcher_id: bytes32,
+    owner_pubkey_bytes: bytes,
+    auth_type: int,
+    members_merkle_root: bytes32,
+    pool_launcher_id: bytes32,
+    new_identity_attest_root: bytes32,
+    bridge_parent_id: bytes32,
+    bridge_amount: int,
+    current_timestamp: int,
+    lineage_proof: LineageProof,
+    *,
+    identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
+) -> CoinSpend:
+    if identity_attest_root != DEFAULT_IDENTITY_ATTEST_ROOT:
+        raise ValueError("identity enrollment can only be built from the empty attestation root")
+    if new_identity_attest_root == DEFAULT_IDENTITY_ATTEST_ROOT:
+        raise ValueError("new_identity_attest_root must not be the empty attestation root")
+    if bridge_amount <= 0:
+        raise ValueError("bridge_amount must be greater than zero")
+    bridge_coin_id = Coin(bridge_parent_id, zkpassport_bridge_policy_hash, uint64(bridge_amount)).name()
+    if bridge_coin_id == vault_coin.name():
+        raise ValueError("derived bridge coin id must differ from the vault coin id")
+    inner_puzzle = puzzle_for_vault_inner(
+        vault_launcher_id, owner_pubkey_bytes, auth_type,
+        members_merkle_root, pool_launcher_id,
+        identity_attest_root=identity_attest_root,
+        zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
+    )
+    full_puzzle = puzzle_for_singleton(vault_launcher_id, inner_puzzle)
+    my_id = vault_coin.name()
+    inner_solution = _inner_solution_for_update_identity(
+        my_id=my_id,
+        my_inner_puzhash=inner_puzzle.get_tree_hash(),
+        my_amount=int(vault_coin.amount),
+        vault_inner_mod_hash=VAULT_INNER_MOD.get_tree_hash(),
+        new_identity_attest_root=new_identity_attest_root,
+        bridge_parent_id=bridge_parent_id,
+        bridge_amount=bridge_amount,
+        current_timestamp=current_timestamp,
     )
     full_solution = solution_for_singleton(
         lineage_proof, uint64(vault_coin.amount), inner_solution,

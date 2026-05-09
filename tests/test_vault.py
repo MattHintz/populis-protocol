@@ -68,6 +68,7 @@ AUTH_TYPE_SECP256K1 = 3
 SPEND_DEPOSIT_TO_POOL = 0x6f    # b'o'
 SPEND_RECEIVE_FROM_POOL = 0x69  # b'i'
 SPEND_ACCEPT_OFFER = 0x61       # b'a'
+SPEND_UPDATE_IDENTITY = 0x7a
 
 # Protocol prefix (must match PROTOCOL_PREFIX in utility_macros.clib = 0x50)
 PROTOCOL_PREFIX = b"\x50"
@@ -85,6 +86,7 @@ OP_REMARK = bytes([1])
 OP_CREATE_PUZZLE_ANN = bytes([62])
 OP_ASSERT_PUZZLE_ANN = bytes([63])
 OP_CREATE_COIN_ANN = bytes([60])
+OP_ASSERT_COIN_ANN = bytes([61])
 OP_ASSERT_MY_COIN_ID = bytes([70])
 OP_ASSERT_MY_PUZZLEHASH = bytes([72])
 OP_ASSERT_MY_AMOUNT = bytes([73])
@@ -915,6 +917,155 @@ class TestP2Pool:
         ])
         conds = self.curried.run(sol).as_python()
         assert extract_cond(conds, OP_ASSERT_PUZZLE_ANN) is not None
+
+
+class TestVaultUpdateIdentity:
+    def _curry_with_identity_root(
+        self,
+        identity_root: bytes32 = IDENTITY_ATTEST_ROOT,
+        bridge_policy_hash: bytes32 = ZKPASSPORT_BRIDGE_POLICY_HASH,
+    ) -> Program:
+        return VAULT_INNER_MOD.curry(
+            VAULT_SINGLETON_STRUCT,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            identity_root,
+            bridge_policy_hash,
+            SINGLETON_MOD_HASH,
+            POOL_LAUNCHER_ID,
+            LAUNCHER_PUZZLE_HASH,
+        )
+
+    def test_update_identity_asserts_bridge_message_and_updates_root(self):
+        from chia.types.blockchain_format.coin import Coin
+        from populis_puzzles.vault_driver import puzzle_for_vault_inner
+        from populis_puzzles.zkpassport_attestation import compute_attestation_bridge_message
+
+        curried = self._curry_with_identity_root()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        vault_mod_hash = VAULT_INNER_MOD.get_tree_hash()
+        new_root = bytes32(b"\x77" * 32)
+        bridge_parent_id = bytes32(b"\x33" * 32)
+        bridge_amount = 1
+        bridge_coin_id = Coin(bridge_parent_id, ZKPASSPORT_BRIDGE_POLICY_HASH, bridge_amount).name()
+
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_UPDATE_IDENTITY,
+            [vault_mod_hash, new_root, bridge_parent_id, bridge_amount, CURRENT_TIMESTAMP],
+        ])
+        conds = curried.run(sol).as_python()
+        bridge_msg = compute_attestation_bridge_message(
+            vault_launcher_id=VAULT_LAUNCHER_ID,
+            attestation_root=new_root,
+            bridge_policy_hash=ZKPASSPORT_BRIDGE_POLICY_HASH,
+        )
+        expected_announcement = hashlib.sha256(
+            bytes(bridge_coin_id) + PROTOCOL_PREFIX + bytes(bridge_msg)
+        ).digest()
+        assert [OP_ASSERT_COIN_ANN, expected_announcement] in conds
+
+        expected_inner = puzzle_for_vault_inner(
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+            identity_attest_root=new_root,
+            zkpassport_bridge_policy_hash=ZKPASSPORT_BRIDGE_POLICY_HASH,
+        ).get_tree_hash()
+        create_coins = [c for c in conds if c[0] == OP_CREATE_COIN]
+        assert create_coins == [[OP_CREATE_COIN, bytes(expected_inner), b"\x01", [bytes(my_inner_puzhash)]]]
+
+    def test_update_identity_rejects_second_enrollment(self):
+        current_root = bytes32(b"\x66" * 32)
+        curried = self._curry_with_identity_root(current_root)
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_UPDATE_IDENTITY,
+            [VAULT_INNER_MOD.get_tree_hash(), bytes32(b"\x77" * 32), bytes32(b"\x33" * 32), 1, CURRENT_TIMESTAMP],
+        ])
+        with pytest.raises(Exception):
+            curried.run(sol)
+
+    def test_update_identity_rejects_empty_new_root(self):
+        curried = self._curry_with_identity_root()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_UPDATE_IDENTITY,
+            [VAULT_INNER_MOD.get_tree_hash(), IDENTITY_ATTEST_ROOT, bytes32(b"\x33" * 32), 1, CURRENT_TIMESTAMP],
+        ])
+        with pytest.raises(Exception):
+            curried.run(sol)
+
+    def test_update_identity_rejects_zero_bridge_amount(self):
+        curried = self._curry_with_identity_root()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_UPDATE_IDENTITY,
+            [VAULT_INNER_MOD.get_tree_hash(), bytes32(b"\x77" * 32), bytes32(b"\x33" * 32), 0, CURRENT_TIMESTAMP],
+        ])
+        with pytest.raises(Exception):
+            curried.run(sol)
+
+    def test_build_vault_update_identity_spend_validates_one_time_inputs(self):
+        from chia.types.blockchain_format.coin import Coin
+        from chia.wallet.lineage_proof import LineageProof
+        from populis_puzzles.vault_driver import build_vault_update_identity_spend
+
+        current_inner = self._curry_with_identity_root()
+        vault_coin = Coin(bytes32(b"\x99" * 32), current_inner.get_tree_hash(), 1)
+        lineage = LineageProof(parent_name=VAULT_LAUNCHER_ID, amount=1)
+        with pytest.raises(ValueError, match="new_identity_attest_root"):
+            build_vault_update_identity_spend(
+                vault_coin,
+                VAULT_LAUNCHER_ID,
+                BLS_OWNER_PUBKEY,
+                AUTH_TYPE_BLS,
+                MEMBERS_MERKLE_ROOT,
+                POOL_LAUNCHER_ID,
+                IDENTITY_ATTEST_ROOT,
+                bytes32(b"\x33" * 32),
+                1,
+                CURRENT_TIMESTAMP,
+                lineage,
+            )
+        with pytest.raises(ValueError, match="bridge_amount"):
+            build_vault_update_identity_spend(
+                vault_coin,
+                VAULT_LAUNCHER_ID,
+                BLS_OWNER_PUBKEY,
+                AUTH_TYPE_BLS,
+                MEMBERS_MERKLE_ROOT,
+                POOL_LAUNCHER_ID,
+                bytes32(b"\x77" * 32),
+                bytes32(b"\x33" * 32),
+                0,
+                CURRENT_TIMESTAMP,
+                lineage,
+            )
+        spend = build_vault_update_identity_spend(
+            vault_coin,
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+            bytes32(b"\x77" * 32),
+            bytes32(b"\x33" * 32),
+            1,
+            CURRENT_TIMESTAMP,
+            lineage,
+        )
+        assert spend.coin == vault_coin
 
 
 class TestVaultUpdateKeys:
