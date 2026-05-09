@@ -39,7 +39,7 @@ This is what RWA infrastructure looks like when you take the "decentralized" par
               └────────────┘  └──────────────┘
 ```
 
-### Core Contracts (16 Chialisp puzzles)
+### Core Contracts (21 production puzzles)
 
 The original 12-contract protocol stack:
 
@@ -64,9 +64,27 @@ off-chain env-var trust roots with on-chain primitives — see
 | Contract | Role | Closes |
 |----------|------|--------|
 | `protocol_config_inner` (A.3) | Curries `(pool_launcher_id, governance_launcher_id, network, version)`; emits `state_hash` on every update. | Off-chain `POPULIS_POOL_LAUNCHER_ID` / `POPULIS_GOVERNANCE_LAUNCHER_ID` / `POPULIS_NETWORK` env-var trust roots. |
-| `admin_authority_inner` (A.2) | m-of-n quorum singleton; rotation requires *m* `AGG_SIG_ME`s from the curried allowlist plus a strictly increasing version. | `POP-CANON-012` foundation (live key revocation = chain event). |
+| `admin_authority_inner` (A.2 v1) | m-of-n quorum singleton; rotation requires *m* `AGG_SIG_ME`s from the curried allowlist plus a strictly increasing version. | `POP-CANON-012` foundation (live key revocation = chain event). |
 | `property_registry_inner` (A.4) | Append-only on-chain log of canonicalised property IDs; each spend emits a `CREATE_PUZZLE_ANNOUNCEMENT` carrying `PROTOCOL_PREFIX \|\| property_id_canon`. | `POP-CANON-014` foundation. |
-| `mint_proposal_inner` (A.1) | Per-proposal state-machine singleton: DRAFT → APPROVED (gov-signed) / CANCELLED (owner-signed). Each transition is replay-protected via monotonic version. | `POP-CANON-013` foundation. |
+| `mint_proposal_inner` (A.1 v1) | Per-proposal state-machine singleton: DRAFT → APPROVED (gov-signed) / CANCELLED (owner-signed). Each transition is replay-protected via monotonic version. | `POP-CANON-013` foundation. |
+
+**Phase 9-Hermes-D — MIPS-pluggable v2 lineage** (CHIP-0043 / CHIP-0036 / CHIP-0037):
+
+| Contract | Role |
+|----------|------|
+| `admin_authority_v2_inner` | A.2 v2 — thin singleton inner that delegates authentication to a CHIP-0043 MIPS `m_of_n` quorum. Each admin slot is a `OneOfN` of personal auth methods (BLS, EIP-712, passkey/WebAuthn, …); the protocol-level admin set is an `MofN` over those slots. Six on-chain spend tags: `OPERATIONAL`, `KEY_ADD_PROPOSE/ACTIVATE/VETO`, `KEY_REMOVE_QUORUM/EMERGENCY`. Polymorphic `ACTIVATE` handles both add and remove pending ops via the `op_kind` field. |
+| `mint_proposal_inner_v2` | A.1 v2 — replaces the v1 hard-coded BLS `OWNER_PUBKEY` / `GOV_PUBKEY` with curried CHIP-0043 member tree hashes. A single proposal can mix any member type (BLS, Eip712Member EVM, passkey) for owner and gov independently. Replay protection: `binding_hash = sha256tree(transition_case ‖ new_state_version ‖ PROPOSAL_DATA_HASH)` locks each member signature to a specific (case, version, proposal) triple. |
+
+The v1 puzzles remain shipped — both lineages coexist so existing
+deployments don't have to migrate atomically.
+
+**PGT (Populis Governance Token) puzzles:**
+
+| Contract | Role |
+|----------|------|
+| `pgt_tail` | CAT tail enforcing the dual-supply (locked + free) governance-token model. |
+| `pgt_locked_inner` | Locked-PGT inner — holds vesting / committee allocations; release requires governance approval. |
+| `pgt_free_inner` | Free-PGT inner — freely transferable governance-vote token issued from `pgt_locked_inner` on unlock. |
 
 ### Key Design Decisions
 
@@ -83,17 +101,26 @@ off-chain env-var trust roots with on-chain primitives — see
 ```
 populis_protocol/
 ├── populis_puzzles/          # Core contract package
-│   ├── *.clsp                # 16 Chialisp contracts (12 protocol + 4 A.x)
+│   ├── *.clsp                # 21 production puzzles + 2 test fixtures
 │   ├── *.clib                # include libraries
 │   ├── *.clsp.hex            # Pre-compiled (checksum-verified on import)
-│   ├── settlement_splitxch.py     # Distribution tree builder
-│   ├── protocol_config_driver.py  # A.3 — protocol-config singleton
-│   ├── admin_authority_driver.py  # A.2 — admin-authority singleton
-│   ├── property_registry_driver.py # A.4 — property-registry singleton
-│   ├── mint_proposal_driver.py    # A.1 — mint-proposal singleton
+│   ├── settlement_splitxch.py        # Distribution tree builder
+│   ├── protocol_config_driver.py     # A.3 — protocol-config singleton
+│   ├── admin_authority_driver.py     # A.2 v1 — BLS-allowlist quorum
+│   ├── admin_authority_v2_driver.py  # A.2 v2 — CHIP-0043 MIPS quorum
+│   ├── property_registry_driver.py   # A.4 — property-registry singleton
+│   ├── mint_proposal_driver.py       # A.1 v1 — BLS-only proposal lifecycle
+│   ├── mint_proposal_v2_driver.py    # A.1 v2 — MIPS-pluggable proposal lifecycle
+│   ├── pgt_driver.py                 # PGT (governance token) helpers
+│   ├── vault_driver.py               # Vault singleton + EIP-712 envelope helpers
 │   └── __init__.py           # load_puzzle(), verify_puzzle_checksum()
-├── tests/                    # 362 tests, ~2s execution
-│   └── test_*.py             # Unit + integration + e2e simulation + A.x state machines
+├── scripts/                  # Cross-repo fixture + puzzle-hex dumpers
+│   ├── dump_v2_fixtures.py                 # admin_authority_v2 → portal
+│   ├── dump_v2_puzzle_hex.sh
+│   ├── dump_mint_proposal_v2_fixtures.py   # mint_proposal_v2 → portal
+│   └── dump_mint_proposal_v2_puzzle_hex.sh
+├── tests/                    # 492 tests, ~4s execution
+│   └── test_*.py             # 26 files: unit + integration + e2e simulation + A.x state machines
 └── pyproject.toml
 ```
 
@@ -121,7 +148,9 @@ pytest
 
 ## Test Suite
 
-362 tests covering every contract spend case, cross-contract message pairing, and a full 9-phase end-to-end lifecycle simulation:
+492 tests across 26 test files covering every contract spend case,
+cross-contract message pairing, and a full 9-phase end-to-end
+lifecycle simulation:
 
 1. Governance mint approval
 2. DID-gated singleton launch
@@ -133,12 +162,16 @@ pytest
 8. Batch settlement (secure-the-bag)
 9. Full round-trip lifecycle
 
-Plus full coverage of the A.1..A.4 trust-root singletons:
+Plus full coverage of the A.1..A.4 trust-root singletons (both v1 and
+the Phase 9-Hermes-D MIPS-pluggable v2 lineage):
 
-- `test_admin_authority.py` — m-of-n rotation, replay protection, signing-message derivation, CLVM-level quorum guards (35 tests).
+- `test_admin_authority.py` — v1 m-of-n rotation, replay protection, signing-message derivation, CLVM-level quorum guards.
+- `test_admin_authority_v2.py` + `test_admin_authority_v2_launch.py` — v2 CHIP-0043 MIPS quorum: all 6 spend tags (`OPERATIONAL`, `KEY_ADD_PROPOSE/ACTIVATE/VETO`, `KEY_REMOVE_QUORUM/EMERGENCY`), polymorphic `ACTIVATE`, mixed-curve admins (BLS / Eip712Member), launch-bundle round-trip.
 - `test_protocol_config.py` — content-hash determinism, governance-signed updates, monotonic versioning.
-- `test_property_registry.py` — append-only log semantics, canonicalisation, CLVM replay rejection (27 tests).
-- `test_mint_proposal.py` — per-proposal state machine, transition signing, state-machine guards, replay protection (38 tests).
+- `test_property_registry.py` — append-only log semantics, canonicalisation, CLVM replay rejection.
+- `test_mint_proposal.py` — v1 per-proposal state machine, transition signing, state-machine guards, replay protection.
+- `test_mint_proposal_v2.py` — v2 MIPS-pluggable proposal lifecycle: BLS, Eip712Member, mixed-curve owner/gov, binding-hash replay across (case, version, proposal) triples, member-hash enforcement, monotonic-version + transition-case guards (25 tests).
+- `test_v2_fixtures.py` — cross-repo fixture round-trip for the TS port in `populis_portal`.
 
 All tests run via pure puzzle evaluation (`.run()` on curried programs). No SpendSim required for unit tests.
 
@@ -169,8 +202,8 @@ On Chia's coin-set model, every constraint is part of the puzzle hash. You can't
 ## What This Is (and Isn't)
 
 **This is:**
-- A working architectural sketch with 12 contracts and 108 passing tests
-- An exploration of how RWA primitives compose on Chia's coin-set model
+- A working architectural sketch with 21 production puzzles and 492 passing tests
+- An exploration of how RWA primitives compose on Chia's coin-set model, including a CHIP-0043 MIPS-pluggable trust-root lineage
 - Open-source infrastructure for the community to examine, critique, and build on
 - A demonstration that fully on-chain RWA is possible without servers, oracles, or off-chain dependencies
 
@@ -183,6 +216,14 @@ On Chia's coin-set model, every constraint is part of the puzzle hash. You can't
 
 ## Roadmap
 
+**Done — Phase 9-Hermes-D (May 2026):**
+- [x] CHIP-0043 MIPS-pluggable admin authority (`admin_authority_v2_inner`)
+- [x] CHIP-0043 MIPS-pluggable mint-proposal lifecycle (`mint_proposal_inner_v2`)
+- [x] EIP-712 / CHIP-0036 / CHIP-0037 EVM-wallet admin path (Eip712Member)
+- [x] Cross-repo TS port + WASM-first portal integration
+
+**Next:**
+- [ ] zkPassport member type — privacy-preserving identity proof as a CHIP-0043 member curve
 - [ ] Redemption pricing model (NAV-based vs fixed vs hybrid)
 - [ ] Richer on-chain metadata schemas (yield, maturity, issuer, regulatory class)
 - [ ] Governance-approved deed variants for different asset types
