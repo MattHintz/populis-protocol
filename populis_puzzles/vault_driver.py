@@ -573,6 +573,35 @@ def _inner_solution_for_receive(
     ])
 
 
+def _inner_solution_for_accept_offer(
+    my_id: bytes32,
+    my_inner_puzhash: bytes32,
+    my_amount: int,
+    deed_launcher_id: bytes32,
+    token_amount: int,
+    pool_inner_puzhash: bytes32,
+    attestation_leaf_hash: bytes32,
+    attestation_proof: Program,
+    current_timestamp: int,
+    signature_data: Optional[bytes],
+) -> Program:
+    return Program.to([
+        bytes(my_id),
+        bytes(my_inner_puzhash),
+        int(my_amount),
+        SPEND_ACCEPT_OFFER,
+        [
+            bytes(deed_launcher_id),
+            int(token_amount),
+            bytes(pool_inner_puzhash),
+            bytes(attestation_leaf_hash),
+            attestation_proof,
+            int(current_timestamp),
+            signature_data if signature_data is not None else b"",
+        ],
+    ])
+
+
 def _inner_solution_for_update_identity(
     my_id: bytes32,
     my_inner_puzhash: bytes32,
@@ -701,6 +730,59 @@ def build_vault_receive_spend(
         my_amount=int(vault_coin.amount),
         deed_launcher_id=deed_launcher_id,
         p2_vault_coin_id=p2_vault_coin_id,
+        current_timestamp=current_timestamp,
+        signature_data=signature_data,
+    )
+    full_solution = solution_for_singleton(
+        lineage_proof, uint64(vault_coin.amount), inner_solution,
+    )
+    return make_spend(vault_coin, full_puzzle, full_solution)
+
+
+def build_vault_accept_offer_spend(
+    vault_coin: Coin,
+    vault_launcher_id: bytes32,
+    owner_pubkey_bytes: bytes,
+    auth_type: int,
+    members_merkle_root: bytes32,
+    pool_launcher_id: bytes32,
+    deed_launcher_id: bytes32,
+    token_amount: int,
+    pool_inner_puzhash: bytes32,
+    identity_attest_root: bytes32,
+    attestation_leaf_hash: bytes32,
+    attestation_proof: Program,
+    current_timestamp: int,
+    lineage_proof: LineageProof,
+    signature_data: Optional[bytes] = None,
+    *,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
+) -> CoinSpend:
+    if auth_type != AUTH_TYPE_BLS:
+        raise ValueError("accept-offer is currently BLS-only")
+    if token_amount <= 0:
+        raise ValueError("token_amount must be greater than zero")
+    if pool_inner_puzhash == bytes32(b"\x00" * 32):
+        raise ValueError("pool_inner_puzhash must not be zero")
+    if identity_attest_root == DEFAULT_IDENTITY_ATTEST_ROOT:
+        raise ValueError("identity_attest_root must be enrolled before accepting offers")
+    inner_puzzle = puzzle_for_vault_inner(
+        vault_launcher_id, owner_pubkey_bytes, auth_type,
+        members_merkle_root, pool_launcher_id,
+        identity_attest_root=identity_attest_root,
+        zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
+    )
+    full_puzzle = puzzle_for_singleton(vault_launcher_id, inner_puzzle)
+    my_id = vault_coin.name()
+    inner_solution = _inner_solution_for_accept_offer(
+        my_id=my_id,
+        my_inner_puzhash=inner_puzzle.get_tree_hash(),
+        my_amount=int(vault_coin.amount),
+        deed_launcher_id=deed_launcher_id,
+        token_amount=token_amount,
+        pool_inner_puzhash=pool_inner_puzhash,
+        attestation_leaf_hash=attestation_leaf_hash,
+        attestation_proof=attestation_proof,
         current_timestamp=current_timestamp,
         signature_data=signature_data,
     )

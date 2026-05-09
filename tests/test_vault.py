@@ -353,6 +353,65 @@ class TestVaultBLSAcceptOffer:
             None,
         ]
 
+    def test_accept_offer_driver_solution_vector(self):
+        from populis_puzzles.vault_driver import _inner_solution_for_accept_offer
+
+        curried = self._curried_enrolled()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = _inner_solution_for_accept_offer(
+            my_id,
+            my_inner_puzhash,
+            1,
+            DEED_LAUNCHER_ID,
+            100_000,
+            POOL_INNER_PUZHASH,
+            ATTESTATION_LEAF_HASH,
+            ATTESTATION_PROOF,
+            CURRENT_TIMESTAMP,
+            None,
+        )
+        assert sol.get_tree_hash().hex() == "8ed1ff5aa20d26c56343e3ad838789f03d2c81a778bfb509b66615271733ad9e"
+        fields = list(sol.as_iter())
+        params = list(fields[4].as_iter())
+        assert bytes32(fields[0].as_atom()) == my_id
+        assert bytes32(fields[1].as_atom()) == my_inner_puzhash
+        assert fields[2].as_int() == 1
+        assert fields[3].as_int() == SPEND_ACCEPT_OFFER
+        assert bytes32(params[0].as_atom()) == DEED_LAUNCHER_ID
+        assert params[1].as_int() == 100_000
+        assert bytes32(params[2].as_atom()) == POOL_INNER_PUZHASH
+        assert bytes32(params[3].as_atom()) == ATTESTATION_LEAF_HASH
+        assert params[4].get_tree_hash() == ATTESTATION_PROOF.get_tree_hash()
+        assert params[5].as_int() == CURRENT_TIMESTAMP
+        assert params[6].as_atom() == b""
+
+    def test_accept_offer_vector_outputs_are_stable(self):
+        from populis_puzzles.vault_driver import _inner_solution_for_accept_offer
+
+        curried = self._curried_enrolled()
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = _inner_solution_for_accept_offer(
+            my_id,
+            my_inner_puzhash,
+            1,
+            DEED_LAUNCHER_ID,
+            100_000,
+            POOL_INNER_PUZHASH,
+            ATTESTATION_LEAF_HASH,
+            ATTESTATION_PROOF,
+            CURRENT_TIMESTAMP,
+            None,
+        )
+        conds = curried.run(sol).as_python()
+        assert extract_cond(conds, OP_AGG_SIG_ME)[2] == bytes.fromhex(
+            "2d33d2424799d4a31f7225871d9a56239729293e44e574c47905587fa84d81db"
+        )
+        assert extract_cond(conds, OP_ASSERT_PUZZLE_ANN)[1] == bytes.fromhex(
+            "56b6a1ffd1538a3e346f0475ca7818a6ef7d79b27d5e3aedb200aca897383446"
+        )
+
     def test_accept_offer_agg_sig_present(self):
         curried = self._curried_enrolled()
         my_id = bytes32(b"\x11" * 32)
@@ -409,6 +468,28 @@ class TestVaultBLSAcceptOffer:
                 CURRENT_TIMESTAMP,
                 None,
             ],
+        ])
+        with pytest.raises(Exception):
+            curried.run(sol)
+
+    def test_accept_offer_rejects_wrong_attestation_root(self):
+        curried = VAULT_INNER_MOD.curry(
+            VAULT_SINGLETON_STRUCT,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            bytes32(b"\x99" * 32),
+            ZKPASSPORT_BRIDGE_POLICY_HASH,
+            SINGLETON_MOD_HASH,
+            POOL_LAUNCHER_ID,
+            LAUNCHER_PUZZLE_HASH,
+        )
+        my_id = bytes32(b"\x11" * 32)
+        my_inner_puzhash = curried.get_tree_hash()
+        sol = Program.to([
+            my_id, my_inner_puzhash, 1,
+            SPEND_ACCEPT_OFFER,
+            self._offer_params(),
         ])
         with pytest.raises(Exception):
             curried.run(sol)
@@ -819,6 +900,77 @@ class TestVaultDriverHelpers:
                 AUTH_TYPE_SECP256R1,
                 MEMBERS_MERKLE_ROOT,
                 POOL_LAUNCHER_ID,
+            )
+
+    def test_build_vault_accept_offer_spend_pins_builder_boundary(self):
+        from chia.types.blockchain_format.coin import Coin
+        from chia.wallet.lineage_proof import LineageProof
+        from populis_puzzles.vault_driver import (
+            build_vault_accept_offer_spend,
+            puzzle_for_vault_inner,
+        )
+
+        current_inner = puzzle_for_vault_inner(
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+            identity_attest_root=ATTESTATION_LEAF_HASH,
+        )
+        vault_coin = Coin(bytes32(b"\x99" * 32), current_inner.get_tree_hash(), 1)
+        lineage = LineageProof(parent_name=VAULT_LAUNCHER_ID, amount=1)
+        spend = build_vault_accept_offer_spend(
+            vault_coin,
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+            DEED_LAUNCHER_ID,
+            100_000,
+            POOL_INNER_PUZHASH,
+            ATTESTATION_LEAF_HASH,
+            ATTESTATION_LEAF_HASH,
+            ATTESTATION_PROOF,
+            CURRENT_TIMESTAMP,
+            lineage,
+        )
+        assert spend.coin == vault_coin
+
+    def test_build_vault_accept_offer_spend_rejects_missing_identity_root(self):
+        from chia.types.blockchain_format.coin import Coin
+        from chia.wallet.lineage_proof import LineageProof
+        from populis_puzzles.vault_driver import (
+            DEFAULT_IDENTITY_ATTEST_ROOT,
+            build_vault_accept_offer_spend,
+            puzzle_for_vault_inner,
+        )
+
+        current_inner = puzzle_for_vault_inner(
+            VAULT_LAUNCHER_ID,
+            BLS_OWNER_PUBKEY,
+            AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT,
+            POOL_LAUNCHER_ID,
+        )
+        vault_coin = Coin(bytes32(b"\x99" * 32), current_inner.get_tree_hash(), 1)
+        with pytest.raises(ValueError, match="identity_attest_root"):
+            build_vault_accept_offer_spend(
+                vault_coin,
+                VAULT_LAUNCHER_ID,
+                BLS_OWNER_PUBKEY,
+                AUTH_TYPE_BLS,
+                MEMBERS_MERKLE_ROOT,
+                POOL_LAUNCHER_ID,
+                DEED_LAUNCHER_ID,
+                100_000,
+                POOL_INNER_PUZHASH,
+                DEFAULT_IDENTITY_ATTEST_ROOT,
+                ATTESTATION_LEAF_HASH,
+                ATTESTATION_PROOF,
+                CURRENT_TIMESTAMP,
+                LineageProof(parent_name=VAULT_LAUNCHER_ID, amount=1),
             )
 
     def test_puzzle_for_vault_inner_defaults_identity_state(self):
