@@ -2,7 +2,7 @@
 
 **A sketch architectural framework for tokenized real-world assets on Chia.**
 
-Populis is an open-source protocol for issuing, pooling, and settling real-world asset (RWA) tokens entirely on-chain. No servers. No databases. No oracles. Just puzzles, singletons, and a full node.
+Populis is a publicly visible, proprietary-licensed protocol for issuing, pooling, and settling real-world asset (RWA) tokens entirely on-chain. No servers. No databases. No oracles. Just puzzles, singletons, and a full node.
 
 > This is an early-stage architectural sketch — working code, passing tests, but not audited. Built in public to advance the conversation about what RWA infrastructure should look like on a UTXO chain.
 
@@ -41,7 +41,7 @@ This is what RWA infrastructure looks like when you take the "decentralized" par
 
 ### Core Contracts (21 production puzzles)
 
-The original 12-contract protocol stack:
+The base protocol stack (12 production puzzles, before the A.x trust-root and PGT extensions):
 
 | Contract | Role |
 |----------|------|
@@ -204,7 +204,7 @@ On Chia's coin-set model, every constraint is part of the puzzle hash. You can't
 **This is:**
 - A working architectural sketch with 21 production puzzles and 492 passing tests
 - An exploration of how RWA primitives compose on Chia's coin-set model, including a CHIP-0043 MIPS-pluggable trust-root lineage
-- Open-source infrastructure for the community to examine, critique, and build on
+- Published infrastructure for the community to examine, critique, and build on under the repository license
 - A demonstration that fully on-chain RWA is possible without servers, oracles, or off-chain dependencies
 
 **This is not:**
