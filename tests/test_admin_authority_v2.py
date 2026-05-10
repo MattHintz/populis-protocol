@@ -35,6 +35,9 @@ from populis_puzzles.admin_authority_v2_driver import (
     PROPOSE_WINDOW,
     PendingOp,
     SPEND_OPERATIONAL,
+    SPEND_KEY_ADD_ACTIVATE,
+    SPEND_KEY_ADD_PROPOSE,
+    SPEND_KEY_REMOVE_QUORUM,
     admin_authority_v2_inner_mod_hash,
     admin_record_for_single_leaf,
     build_key_add_activate_solution,
@@ -45,6 +48,7 @@ from populis_puzzles.admin_authority_v2_driver import (
     build_operational_solution,
     compute_admins_hash,
     compute_pending_ops_hash,
+    compute_state_hash,
     launch_state_from_v1_allowlist,
     make_inner_puzzle,
     parse_inner_puzzle,
@@ -97,6 +101,15 @@ def _trivial_mips_puzzle() -> Program:
     signature check or coin assertion to interfere with inspection.
     """
     return Program.to((1, [[1, b"\xCA\xFE"]]))  # (q . ((1 0xCAFE)))
+
+
+def _first_announcement_payload(result: Program) -> bytes:
+    for cond in result.as_iter():
+        if int(cond.first().as_int()) == 62:
+            payload = cond.rest().first().atom
+            assert payload is not None
+            return payload
+    raise AssertionError("No CREATE_PUZZLE_ANNOUNCEMENT emitted")
 
 
 _BLS_MEMBER_FIXTURE: Program | None = None
@@ -524,6 +537,39 @@ class TestKeyAddPropose:
         assert len(expected_new_pending_hash) == 32
         assert expected_new_pending_hash != EMPTY_LIST_HASH
 
+    def test_propose_adds_pending_key_without_adding_admin_slot(self, propose_state):
+        activates_at = CURRENT_BLOCK_HEIGHT + DEFAULT_COOLDOWN_BLOCKS
+        expected_pending = (
+            PendingOp(
+                admin_idx=0,
+                op_kind=OP_KIND_ADD,
+                target_hash=NEW_MEMBER_HASH,
+                activates_at=activates_at,
+            ),
+        )
+        expected_state_hash = compute_state_hash(
+            propose_state["mips_root"],
+            compute_admins_hash(propose_state["admins"]),
+            compute_pending_ops_hash(expected_pending),
+            INITIAL_AUTHORITY_VERSION + 1,
+        )
+
+        sol = build_key_add_propose_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=propose_state["admins"],
+            current_pending_ops=propose_state["pending_ops"],
+            admin_idx=0,
+            approving_member_reveal=propose_state["approving_member"],
+            approving_member_solution=Program.to(0),
+            new_member_hash=NEW_MEMBER_HASH,
+            current_block_height=CURRENT_BLOCK_HEIGHT,
+        )
+        payload = _first_announcement_payload(propose_state["inner"].run(sol))
+
+        assert payload[1] == SPEND_KEY_ADD_PROPOSE
+        assert payload[2:] == expected_state_hash
+
 
 # ─────────────────────────────────────────────────────────────────────────
 # KEY_ADD_ACTIVATE spend (tag 0x03) — ADD activation path.
@@ -563,6 +609,7 @@ def activate_state(propose_state):
     return {
         "admins": propose_state["admins"],
         "pending_ops": pending,
+        "mips_root": propose_state["mips_root"],
         "activates_at": activates_at,
         "inner": inner,
     }
@@ -679,6 +726,106 @@ class TestKeyAddActivate:
         )
         with pytest.raises(Exception):
             activate_state["inner"].run(sol)
+
+    def test_activate_adds_key_to_existing_admin_slot_only(self, activate_state):
+        current_admin = activate_state["admins"][0]
+        expected_admins = (
+            AdminRecord(
+                admin_idx=current_admin.admin_idx,
+                leaves=current_admin.leaves + (NEW_MEMBER_HASH,),
+                m_within=current_admin.m_within,
+            ),
+            activate_state["admins"][1],
+        )
+        expected_state_hash = compute_state_hash(
+            activate_state["mips_root"],
+            compute_admins_hash(expected_admins),
+            EMPTY_LIST_HASH,
+            INITIAL_AUTHORITY_VERSION + 1,
+        )
+
+        sol = build_key_add_activate_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=activate_state["admins"],
+            current_pending_ops=activate_state["pending_ops"],
+            admin_idx=0,
+            op_kind=OP_KIND_ADD,
+            target_member_hash=NEW_MEMBER_HASH,
+            activates_at=activate_state["activates_at"],
+        )
+        payload = _first_announcement_payload(activate_state["inner"].run(sol))
+
+        assert payload[1] == SPEND_KEY_ADD_ACTIVATE
+        assert payload[2:] == expected_state_hash
+        assert len(expected_admins) == len(activate_state["admins"])
+        assert [a.admin_idx for a in expected_admins] == [0, 1]
+
+    def test_activate_rejects_pending_add_for_brand_new_admin_slot(self, propose_state):
+        new_admin_idx = 2
+        activates_at = CURRENT_BLOCK_HEIGHT + DEFAULT_COOLDOWN_BLOCKS
+        pending = (
+            PendingOp(
+                admin_idx=new_admin_idx,
+                op_kind=OP_KIND_ADD,
+                target_hash=NEW_MEMBER_HASH,
+                activates_at=activates_at,
+            ),
+        )
+        inner = make_inner_puzzle(
+            mips_root_hash=propose_state["mips_root"],
+            admins_hash=compute_admins_hash(propose_state["admins"]),
+            pending_ops_hash=compute_pending_ops_hash(pending),
+            authority_version=INITIAL_AUTHORITY_VERSION,
+        )
+        sol = build_key_add_activate_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=propose_state["admins"],
+            current_pending_ops=pending,
+            admin_idx=new_admin_idx,
+            op_kind=OP_KIND_ADD,
+            target_member_hash=NEW_MEMBER_HASH,
+            activates_at=activates_at,
+        )
+
+        with pytest.raises(Exception):
+            inner.run(sol)
+
+    def test_key_add_activation_keeps_operational_authority_bound_to_existing_mips_root(self, activate_state):
+        current_admin = activate_state["admins"][0]
+        activated_admins = (
+            AdminRecord(
+                admin_idx=current_admin.admin_idx,
+                leaves=current_admin.leaves + (NEW_MEMBER_HASH,),
+                m_within=current_admin.m_within,
+            ),
+            activate_state["admins"][1],
+        )
+        post_activation_inner = make_inner_puzzle(
+            mips_root_hash=activate_state["mips_root"],
+            admins_hash=compute_admins_hash(activated_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION + 1,
+        )
+        old_mips_solution = build_operational_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 2,
+            mips_puzzle_reveal=_trivial_mips_puzzle(),
+            mips_solution=Program.to(0),
+        )
+        result = post_activation_inner.run(old_mips_solution)
+        assert _first_announcement_payload(result)[1] == SPEND_OPERATIONAL
+
+        new_mips_reveal = Program.to((1, [[1, b"new-key-mips"]]))
+        new_mips_solution = build_operational_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 2,
+            mips_puzzle_reveal=new_mips_reveal,
+            mips_solution=Program.to(0),
+        )
+        with pytest.raises(Exception):
+            post_activation_inner.run(new_mips_solution)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -942,6 +1089,40 @@ class TestKeyRemoveQuorum:
         )
         with pytest.raises(Exception):
             s["inner"].run(sol)
+
+    def test_remove_quorum_removes_key_without_changing_admin_slots_or_mips_root(self, remove_quorum_state):
+        s = remove_quorum_state
+        expected_admins = (
+            AdminRecord(
+                admin_idx=0,
+                leaves=(s["leaf_a_hash"], s["leaf_b_hash"]),
+                m_within=2,
+            ),
+        )
+        expected_state_hash = compute_state_hash(
+            bytes32(_trivial_mips_puzzle().get_tree_hash()),
+            compute_admins_hash(expected_admins),
+            EMPTY_LIST_HASH,
+            INITIAL_AUTHORITY_VERSION + 1,
+        )
+
+        sol = build_key_remove_quorum_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=s["admins"],
+            admin_idx=0,
+            removed_member_hash=s["leaf_c_hash"],
+            approving_pairs=[
+                (s["leaf_a"], Program.to(0)),
+                (s["leaf_b"], Program.to(0)),
+            ],
+        )
+        payload = _first_announcement_payload(s["inner"].run(sol))
+
+        assert payload[1] == SPEND_KEY_REMOVE_QUORUM
+        assert payload[2:] == expected_state_hash
+        assert len(expected_admins) == len(s["admins"])
+        assert [a.admin_idx for a in expected_admins] == [0]
 
 
 # ─────────────────────────────────────────────────────────────────────────
