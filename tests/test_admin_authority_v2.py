@@ -37,12 +37,14 @@ from populis_puzzles.admin_authority_v2_driver import (
     PROPOSE_WINDOW,
     PendingOp,
     SPEND_OPERATIONAL,
+    SPEND_ADMIN_ROSTER_UPDATE,
     SPEND_KEY_ADD_ACTIVATE,
     SPEND_KEY_ADD_PROPOSE,
     SPEND_KEY_REMOVE_QUORUM,
     admin_authority_v2_inner_mod_hash,
     admin_supermajority_threshold,
     admin_record_for_single_leaf,
+    build_admin_roster_update_solution,
     build_admin_slot_add_preview,
     build_key_add_activate_solution,
     build_key_add_propose_solution,
@@ -368,6 +370,93 @@ class TestAdminRosterUpdatePreview:
                 new_authority_version=2,
                 max_admins=1,
             )
+
+
+class TestAdminRosterUpdateSpendContract:
+    def test_reserved_spend_tag_and_solution_payload_shape(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        pending_ops = (
+            PendingOp(
+                admin_idx=0,
+                op_kind=OP_KIND_ADD,
+                target_hash=LEAF_EIP712_ADMIN_1,
+                activates_at=CURRENT_BLOCK_HEIGHT + DEFAULT_COOLDOWN_BLOCKS,
+            ),
+        )
+        mips_reveal = _trivial_mips_puzzle()
+        mips_solution = Program.to([])
+        new_admin = AdminRecord(
+            admin_idx=1,
+            leaves=(LEAF_BLS_ADMIN_2,),
+            m_within=1,
+        )
+        new_mips_root = bytes32(b"\xB0" * 32)
+
+        sol = build_admin_roster_update_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=current_admins,
+            current_pending_ops=pending_ops,
+            current_mips_reveal=mips_reveal,
+            current_mips_solution=mips_solution,
+            new_admin=new_admin,
+            new_mips_root_hash=new_mips_root,
+        )
+        outer = list(sol.as_iter())
+        spend_args = list(outer[3].as_iter())
+
+        assert SPEND_ADMIN_ROSTER_UPDATE == 0x07
+        assert int(outer[0].as_int()) == SPEND_ADMIN_ROSTER_UPDATE
+        assert int(outer[1].as_int()) == SINGLETON_AMOUNT
+        assert int(outer[2].as_int()) == INITIAL_AUTHORITY_VERSION + 1
+        assert len(spend_args) == 6
+        assert bytes32(spend_args[0].get_tree_hash()) == bytes32(
+            Program.to([a.to_program() for a in current_admins]).get_tree_hash()
+        )
+        assert bytes32(spend_args[1].get_tree_hash()) == bytes32(
+            Program.to([p.to_program() for p in pending_ops]).get_tree_hash()
+        )
+        assert bytes32(spend_args[2].get_tree_hash()) == bytes32(
+            mips_reveal.get_tree_hash()
+        )
+        assert bytes32(spend_args[3].get_tree_hash()) == bytes32(
+            mips_solution.get_tree_hash()
+        )
+        assert bytes32(spend_args[4].get_tree_hash()) == bytes32(
+            new_admin.to_program().get_tree_hash()
+        )
+        assert bytes32(spend_args[5].atom) == new_mips_root
+
+    def test_reserved_spend_tag_rejects_until_clsp_handler_lands(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        mips_reveal = _trivial_mips_puzzle()
+        inner = make_inner_puzzle(
+            mips_root_hash=bytes32(mips_reveal.get_tree_hash()),
+            admins_hash=compute_admins_hash(current_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION,
+        )
+        sol = build_admin_roster_update_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=current_admins,
+            current_pending_ops=(),
+            current_mips_reveal=mips_reveal,
+            current_mips_solution=Program.to([]),
+            new_admin=AdminRecord(
+                admin_idx=1,
+                leaves=(LEAF_BLS_ADMIN_2,),
+                m_within=1,
+            ),
+            new_mips_root_hash=bytes32(b"\xB0" * 32),
+        )
+
+        with pytest.raises(Exception):
+            inner.run(sol)
 
 
 # ─────────────────────────────────────────────────────────────────────────

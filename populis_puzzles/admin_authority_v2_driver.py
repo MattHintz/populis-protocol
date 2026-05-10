@@ -49,6 +49,7 @@ SPEND_KEY_ADD_ACTIVATE = 0x03
 SPEND_KEY_ADD_VETO = 0x04
 SPEND_KEY_REMOVE_QUORUM = 0x05
 SPEND_KEY_REMOVE_EMERGENCY = 0x06
+SPEND_ADMIN_ROSTER_UPDATE = 0x07
 
 # Op-kind tags inside pending-ops entries.
 OP_KIND_ADD = 0x01
@@ -566,6 +567,34 @@ def build_operational_solution(
             my_amount,
             new_authority_version,
             [mips_puzzle_reveal, mips_solution],
+        ]
+    )
+
+
+def build_admin_roster_update_solution(
+    *,
+    my_amount: int,
+    new_authority_version: int,
+    current_admins: Sequence[AdminRecord],
+    current_pending_ops: Sequence[PendingOp],
+    current_mips_reveal: Program,
+    current_mips_solution: Program,
+    new_admin: AdminRecord,
+    new_mips_root_hash: bytes32,
+) -> Program:
+    return Program.to(
+        [
+            SPEND_ADMIN_ROSTER_UPDATE,
+            my_amount,
+            new_authority_version,
+            [
+                [a.to_program() for a in current_admins],
+                [p.to_program() for p in current_pending_ops],
+                current_mips_reveal,
+                current_mips_solution,
+                new_admin.to_program(),
+                new_mips_root_hash,
+            ],
         ]
     )
 

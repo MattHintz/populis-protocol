@@ -119,6 +119,7 @@
   (defconstant SPEND_KEY_ADD_VETO         0x04)
   (defconstant SPEND_KEY_REMOVE_QUORUM    0x05)
   (defconstant SPEND_KEY_REMOVE_EMERGENCY 0x06)
+  (defconstant SPEND_ADMIN_ROSTER_UPDATE  0x07)
 
   ;; Op-kind tags inside pending-ops entries. Distinct from spend tags so
   ;; that ACTIVATE handlers can dispatch on the kind that was originally
