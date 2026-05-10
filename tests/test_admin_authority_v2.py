@@ -429,13 +429,22 @@ class TestAdminRosterUpdateSpendContract:
         )
         assert bytes32(spend_args[5].atom) == new_mips_root
 
-    def test_reserved_spend_tag_rejects_until_clsp_handler_lands(self):
+    def test_admin_roster_update_appends_slot_and_updates_authority_root(self):
         current_admins = (
             AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
         )
-        mips_reveal = _trivial_mips_puzzle()
+        new_admin = AdminRecord(
+            admin_idx=1,
+            leaves=(LEAF_BLS_ADMIN_2,),
+            m_within=1,
+        )
+        expected_admins = current_admins + (new_admin,)
+        current_mips_reveal = _trivial_mips_puzzle()
+        current_mips_root = bytes32(current_mips_reveal.get_tree_hash())
+        new_mips_reveal = Program.to((1, [[1, b"new-2-of-2"]]))
+        new_mips_root = bytes32(new_mips_reveal.get_tree_hash())
         inner = make_inner_puzzle(
-            mips_root_hash=bytes32(mips_reveal.get_tree_hash()),
+            mips_root_hash=current_mips_root,
             admins_hash=compute_admins_hash(current_admins),
             pending_ops_hash=EMPTY_LIST_HASH,
             authority_version=INITIAL_AUTHORITY_VERSION,
@@ -445,7 +454,66 @@ class TestAdminRosterUpdateSpendContract:
             new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
             current_admins=current_admins,
             current_pending_ops=(),
-            current_mips_reveal=mips_reveal,
+            current_mips_reveal=current_mips_reveal,
+            current_mips_solution=Program.to([]),
+            new_admin=new_admin,
+            new_mips_root_hash=new_mips_root,
+        )
+
+        result = inner.run(sol)
+        payload = _first_announcement_payload(result)
+        expected_state_hash = compute_state_hash(
+            new_mips_root,
+            compute_admins_hash(expected_admins),
+            EMPTY_LIST_HASH,
+            INITIAL_AUTHORITY_VERSION + 1,
+        )
+
+        assert payload[1] == SPEND_ADMIN_ROSTER_UPDATE
+        assert payload[2:] == expected_state_hash
+        assert 1 in [int(cond.first().as_int()) for cond in result.as_iter()]
+
+        post_update_inner = make_inner_puzzle(
+            mips_root_hash=new_mips_root,
+            admins_hash=compute_admins_hash(expected_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION + 1,
+        )
+        old_root_sol = build_operational_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 2,
+            mips_puzzle_reveal=current_mips_reveal,
+            mips_solution=Program.to([]),
+        )
+        with pytest.raises(Exception):
+            post_update_inner.run(old_root_sol)
+
+        new_root_sol = build_operational_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 2,
+            mips_puzzle_reveal=new_mips_reveal,
+            mips_solution=Program.to([]),
+        )
+        post_update_inner.run(new_root_sol)
+
+    def test_admin_roster_update_rejects_mismatched_current_mips_reveal(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        current_mips_reveal = _trivial_mips_puzzle()
+        wrong_mips_reveal = Program.to((1, [[1, b"wrong-root"]]))
+        inner = make_inner_puzzle(
+            mips_root_hash=bytes32(current_mips_reveal.get_tree_hash()),
+            admins_hash=compute_admins_hash(current_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION,
+        )
+        sol = build_admin_roster_update_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=current_admins,
+            current_pending_ops=(),
+            current_mips_reveal=wrong_mips_reveal,
             current_mips_solution=Program.to([]),
             new_admin=AdminRecord(
                 admin_idx=1,
@@ -457,6 +525,93 @@ class TestAdminRosterUpdateSpendContract:
 
         with pytest.raises(Exception):
             inner.run(sol)
+
+    @pytest.mark.parametrize(
+        "new_admin",
+        [
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_2,), m_within=1),
+            AdminRecord(admin_idx=2, leaves=(LEAF_BLS_ADMIN_2,), m_within=1),
+            AdminRecord(admin_idx=1, leaves=(), m_within=1),
+            AdminRecord(admin_idx=1, leaves=(LEAF_BLS_ADMIN_2,), m_within=2),
+        ],
+    )
+    def test_admin_roster_update_rejects_invalid_new_admin_record(self, new_admin):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        current_mips_reveal = _trivial_mips_puzzle()
+        inner = make_inner_puzzle(
+            mips_root_hash=bytes32(current_mips_reveal.get_tree_hash()),
+            admins_hash=compute_admins_hash(current_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION,
+        )
+        sol = build_admin_roster_update_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=current_admins,
+            current_pending_ops=(),
+            current_mips_reveal=current_mips_reveal,
+            current_mips_solution=Program.to([]),
+            new_admin=new_admin,
+            new_mips_root_hash=bytes32(b"\xB0" * 32),
+        )
+
+        with pytest.raises(Exception):
+            inner.run(sol)
+
+    def test_admin_roster_update_rejects_unchanged_mips_root_and_max_admins(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        current_mips_reveal = _trivial_mips_puzzle()
+        current_mips_root = bytes32(current_mips_reveal.get_tree_hash())
+        sol = build_admin_roster_update_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=current_admins,
+            current_pending_ops=(),
+            current_mips_reveal=current_mips_reveal,
+            current_mips_solution=Program.to([]),
+            new_admin=AdminRecord(
+                admin_idx=1,
+                leaves=(LEAF_BLS_ADMIN_2,),
+                m_within=1,
+            ),
+            new_mips_root_hash=current_mips_root,
+        )
+        inner_same_root = make_inner_puzzle(
+            mips_root_hash=current_mips_root,
+            admins_hash=compute_admins_hash(current_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION,
+        )
+        with pytest.raises(Exception):
+            inner_same_root.run(sol)
+
+        inner_max_admins = make_inner_puzzle(
+            mips_root_hash=current_mips_root,
+            admins_hash=compute_admins_hash(current_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION,
+            max_admins=1,
+        )
+        sol_new_root = build_admin_roster_update_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=current_admins,
+            current_pending_ops=(),
+            current_mips_reveal=current_mips_reveal,
+            current_mips_solution=Program.to([]),
+            new_admin=AdminRecord(
+                admin_idx=1,
+                leaves=(LEAF_BLS_ADMIN_2,),
+                m_within=1,
+            ),
+            new_mips_root_hash=bytes32(b"\xB0" * 32),
+        )
+        with pytest.raises(Exception):
+            inner_max_admins.run(sol_new_root)
 
 
 # ─────────────────────────────────────────────────────────────────────────

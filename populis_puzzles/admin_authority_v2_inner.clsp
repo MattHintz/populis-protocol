@@ -203,6 +203,22 @@
     )
   )
 
+  (defun all-size-b32 (lst)
+    (if lst
+      (if (is-size-b32 (f lst))
+        (all-size-b32 (r lst))
+        ())
+      1)
+  )
+
+  (defun no-duplicate-atoms (lst)
+    (if lst
+      (if (atom-in-list (f lst) (r lst))
+        ()
+        (no-duplicate-atoms (r lst)))
+      1)
+  )
+
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
   ;; Admin-record lookup
   ;;
@@ -219,6 +235,14 @@
       )
       ()
     )
+  )
+
+  (defun max-admin-idx (admins current_max)
+    (if admins
+      (max-admin-idx
+        (r admins)
+        (if (> (f (f admins)) current_max) (f (f admins)) current_max))
+      current_max)
   )
 
   ;; Replace the admin record at `target_idx` with `new_record`. Returns the
@@ -985,6 +1009,41 @@
     )
   )
 
+  (defun-inline handle-admin-roster-update
+      (current_admins_list current_pending_ops_list current_mips_reveal
+       current_mips_solution new_admin_record new_mips_root_hash
+       my_amount new_authority_version)
+    (assert
+      (= (sha256tree current_admins_list) ADMINS_HASH)
+      (= (sha256tree current_pending_ops_list) PENDING_KEY_OPS_HASH)
+      (= (sha256tree current_mips_reveal) MIPS_ROOT_HASH)
+      current_admins_list
+      (> MAX_ADMINS (list-length current_admins_list))
+      (is-size-b32 new_mips_root_hash)
+      (not (= new_mips_root_hash MIPS_ROOT_HASH))
+      (is-uint64 (f new_admin_record))
+      (= (f new_admin_record) (+ (max-admin-idx current_admins_list 0) 1))
+      (not (find-admin-by-idx current_admins_list (f new_admin_record)))
+      (f (r new_admin_record))
+      (not (> (list-length (f (r new_admin_record))) MAX_KEYS_PER_ADMIN))
+      (all-size-b32 (f (r new_admin_record)))
+      (no-duplicate-atoms (f (r new_admin_record)))
+      (is-uint64 (f (r (r new_admin_record))))
+      (f (r (r new_admin_record)))
+      (not (> (f (r (r new_admin_record)))
+              (list-length (f (r new_admin_record)))))
+      (merge-lists
+        (a current_mips_reveal current_mips_solution)
+        (emit-shim-conditions
+          new_mips_root_hash
+          (sha256tree (append-element current_admins_list new_admin_record))
+          PENDING_KEY_OPS_HASH
+          new_authority_version
+          my_amount
+          SPEND_ADMIN_ROSTER_UPDATE))
+    )
+  )
+
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
   ;; Main: validate common preconditions, then dispatch on spend_tag.
   ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1066,9 +1125,19 @@
           (f (r (r (r (r (r (r spend_args)))))))   ; current_block_height
           my_amount
           new_authority_version)
-        ;; All six spend tags now have handlers. Any unrecognised tag
+      (if (= spend_tag SPEND_ADMIN_ROSTER_UPDATE)
+        (handle-admin-roster-update
+          (f spend_args)                       ; current_admins_list
+          (f (r spend_args))                   ; current_pending_ops_list
+          (f (r (r spend_args)))               ; current_mips_reveal
+          (f (r (r (r spend_args))))           ; current_mips_solution
+          (f (r (r (r (r spend_args)))))       ; new_admin_record
+          (f (r (r (r (r (r spend_args))))))   ; new_mips_root_hash
+          my_amount
+          new_authority_version)
+        ;; All seven spend tags now have handlers. Any unrecognised tag
         ;; raises — defends against future protocol-version drift in
         ;; off-chain construction.
-        (x)))))))
+        (x))))))))
   )
 )
