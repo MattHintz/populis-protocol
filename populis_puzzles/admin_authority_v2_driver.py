@@ -151,6 +151,12 @@ class AdminRosterUpdatePreview:
     new_state_hash: bytes32
 
 
+@dataclass(frozen=True)
+class AdminRosterUpdateSpend:
+    preview: AdminRosterUpdatePreview
+    solution: Program
+
+
 def compute_admins_hash(admins: Sequence[AdminRecord]) -> bytes32:
     """sha256tree of the admins list. Matches on-chain ADMINS_HASH."""
     return bytes32(Program.to([a.to_program() for a in admins]).get_tree_hash())
@@ -597,6 +603,44 @@ def build_admin_roster_update_solution(
             ],
         ]
     )
+
+
+def build_admin_slot_add_spend(
+    *,
+    my_amount: int,
+    current_authority_version: int,
+    new_authority_version: int,
+    current_admins: Sequence[AdminRecord],
+    current_pending_ops: Sequence[PendingOp],
+    current_mips_reveal: Program,
+    current_mips_solution: Program,
+    new_admin: AdminRecord,
+    new_mips_root_hash: bytes32,
+    max_admins: int = DEFAULT_MAX_ADMINS,
+    max_keys_per_admin: int = DEFAULT_MAX_KEYS_PER_ADMIN,
+) -> AdminRosterUpdateSpend:
+    preview = build_admin_slot_add_preview(
+        current_admins=current_admins,
+        current_pending_ops=current_pending_ops,
+        new_admin=new_admin,
+        current_mips_root_hash=bytes32(current_mips_reveal.get_tree_hash()),
+        new_mips_root_hash=new_mips_root_hash,
+        current_authority_version=current_authority_version,
+        new_authority_version=new_authority_version,
+        max_admins=max_admins,
+        max_keys_per_admin=max_keys_per_admin,
+    )
+    solution = build_admin_roster_update_solution(
+        my_amount=my_amount,
+        new_authority_version=preview.new_authority_version,
+        current_admins=current_admins,
+        current_pending_ops=current_pending_ops,
+        current_mips_reveal=current_mips_reveal,
+        current_mips_solution=current_mips_solution,
+        new_admin=new_admin,
+        new_mips_root_hash=preview.new_mips_root_hash,
+    )
+    return AdminRosterUpdateSpend(preview=preview, solution=solution)
 
 
 def build_key_add_activate_solution(

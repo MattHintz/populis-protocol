@@ -46,6 +46,7 @@ from populis_puzzles.admin_authority_v2_driver import (
     admin_record_for_single_leaf,
     build_admin_roster_update_solution,
     build_admin_slot_add_preview,
+    build_admin_slot_add_spend,
     build_key_add_activate_solution,
     build_key_add_propose_solution,
     build_key_add_veto_solution,
@@ -123,6 +124,16 @@ def _first_announcement_payload(result: Program) -> bytes:
             assert payload is not None
             return payload
     raise AssertionError("No CREATE_PUZZLE_ANNOUNCEMENT emitted")
+
+
+def _first_create_coin_condition(result: Program) -> tuple[bytes32, int]:
+    for cond in result.as_iter():
+        if int(cond.first().as_int()) == 51:
+            puzzle_hash = cond.rest().first().atom
+            assert puzzle_hash is not None
+            amount = int(cond.rest().rest().first().as_int())
+            return bytes32(puzzle_hash), amount
+    raise AssertionError("No CREATE_COIN emitted")
 
 
 _BLS_MEMBER_FIXTURE: Program | None = None
@@ -495,6 +506,63 @@ class TestAdminRosterUpdateSpendContract:
             mips_solution=Program.to([]),
         )
         post_update_inner.run(new_root_sol)
+
+    def test_preview_backed_spend_matches_clsp_outputs_with_pending_ops(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        pending_ops = (
+            PendingOp(
+                admin_idx=0,
+                op_kind=OP_KIND_ADD,
+                target_hash=LEAF_EIP712_ADMIN_1,
+                activates_at=CURRENT_BLOCK_HEIGHT + DEFAULT_COOLDOWN_BLOCKS,
+            ),
+        )
+        new_admin = AdminRecord(
+            admin_idx=1,
+            leaves=(LEAF_BLS_ADMIN_2,),
+            m_within=1,
+        )
+        current_mips_reveal = _trivial_mips_puzzle()
+        current_mips_root = bytes32(current_mips_reveal.get_tree_hash())
+        new_mips_reveal = Program.to((1, [[1, b"new-pending-root"]]))
+        built = build_admin_slot_add_spend(
+            my_amount=SINGLETON_AMOUNT,
+            current_authority_version=INITIAL_AUTHORITY_VERSION,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_admins=current_admins,
+            current_pending_ops=pending_ops,
+            current_mips_reveal=current_mips_reveal,
+            current_mips_solution=Program.to([]),
+            new_admin=new_admin,
+            new_mips_root_hash=bytes32(new_mips_reveal.get_tree_hash()),
+        )
+        inner = make_inner_puzzle(
+            mips_root_hash=current_mips_root,
+            admins_hash=compute_admins_hash(current_admins),
+            pending_ops_hash=compute_pending_ops_hash(pending_ops),
+            authority_version=INITIAL_AUTHORITY_VERSION,
+        )
+
+        result = inner.run(built.solution)
+        payload = _first_announcement_payload(result)
+        create_coin_puzzle_hash, create_coin_amount = _first_create_coin_condition(result)
+        expected_inner = make_inner_puzzle(
+            mips_root_hash=built.preview.new_mips_root_hash,
+            admins_hash=built.preview.new_admins_hash,
+            pending_ops_hash=built.preview.new_pending_ops_hash,
+            authority_version=built.preview.new_authority_version,
+        )
+
+        assert built.preview.new_admins == current_admins + (new_admin,)
+        assert built.preview.new_threshold == 2
+        assert built.preview.new_pending_ops_hash == compute_pending_ops_hash(pending_ops)
+        assert built.preview.new_pending_ops_hash != EMPTY_LIST_HASH
+        assert payload[1] == SPEND_ADMIN_ROSTER_UPDATE
+        assert payload[2:] == built.preview.new_state_hash
+        assert create_coin_puzzle_hash == bytes32(expected_inner.get_tree_hash())
+        assert create_coin_amount == SINGLETON_AMOUNT
 
     def test_admin_roster_update_rejects_mismatched_current_mips_reveal(self):
         current_admins = (
