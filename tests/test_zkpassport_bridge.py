@@ -97,6 +97,7 @@ def test_threshold_signatures_emit_vault_announcement():
         vault_launcher_id=VAULT_LAUNCHER_ID,
         attestation_root=NEW_IDENTITY_ROOT,
         bridge_policy_hash=artifacts.bridge_policy_hash,
+        bridge_coin_id=artifacts.bridge_coin_id,
         bridge_message=bridge_message,
         attestation_leaf_hash=ATTESTATION_LEAF_HASH,
         scoped_nullifier=SCOPED_NULLIFIER,
@@ -110,6 +111,28 @@ def test_threshold_signatures_emit_vault_announcement():
     assert [OP_AGG_SIG_ME, VALIDATOR_A, bytes(validator_message)] in conds
     assert [OP_AGG_SIG_ME, VALIDATOR_C, bytes(validator_message)] in conds
     assert [OP_CREATE_COIN_ANN, PROTOCOL_PREFIX + bytes(bridge_message)] in conds
+
+
+def test_validator_message_is_bound_to_bridge_coin_id():
+    first = _bridge_spend()
+    second_coin = Coin(bytes32(b"\xef" * 32), first.bridge_policy_hash, BRIDGE_AMOUNT)
+    second = build_bridge_spend(
+        bridge_coin=second_coin,
+        validator_pubkeys=VALIDATORS,
+        threshold=THRESHOLD,
+        signer_indices=[0, 2],
+        vault_launcher_id=VAULT_LAUNCHER_ID,
+        new_identity_attest_root=NEW_IDENTITY_ROOT,
+        attestation_leaf_hash=ATTESTATION_LEAF_HASH,
+        scoped_nullifier=SCOPED_NULLIFIER,
+        nullifier_type=NULLIFIER_TYPE,
+        service_scope_hash=SERVICE_SCOPE_HASH,
+        service_subscope_hash=SERVICE_SUBSCOPE_HASH,
+        proof_timestamp=PROOF_TIMESTAMP,
+    )
+
+    assert first.bridge_coin_id != second.bridge_coin_id
+    assert first.validator_message != second.validator_message
 
 
 def test_insufficient_signatures_fail_in_clvm():

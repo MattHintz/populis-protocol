@@ -86,7 +86,7 @@ FROZEN_CHECKSUM: Optional[str] = (
     # so the all-puzzle checksum changes even though no existing
     # puzzle's bytecode did.
     # The new bridge policy hash is derived by zkpassport_bridge_driver.py.
-    "9a8d790ba7315aba07aca46ac8f683b027b7a8a3d5999ea3b50791e129d69f73"
+    "da9808977191fa048dad7e80cd56ab74aca3efdcb93e83847ec56605a8c62927"
 )
 
 # ── Cache ──

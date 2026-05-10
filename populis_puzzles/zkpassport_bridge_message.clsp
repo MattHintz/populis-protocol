@@ -85,7 +85,7 @@
   )
 
   (defun-inline validator-message (
-      vault_launcher_id new_identity_attest_root bridge_policy_hash
+      vault_launcher_id new_identity_attest_root bridge_policy_hash bridge_coin_id
       attestation_leaf_hash scoped_nullifier nullifier_type_b32
       service_scope_hash service_subscope_hash proof_timestamp_b32)
     (sha256tree
@@ -94,6 +94,7 @@
         vault_launcher_id
         new_identity_attest_root
         bridge_policy_hash
+        bridge_coin_id
         (bridge-message vault_launcher_id new_identity_attest_root bridge_policy_hash)
         attestation_leaf_hash
         scoped_nullifier
@@ -130,7 +131,7 @@
     (merge-lists
       (emit-sigs VALIDATOR_PUBKEYS signer_indices
         (validator-message
-          vault_launcher_id new_identity_attest_root my_puzzlehash
+          vault_launcher_id new_identity_attest_root my_puzzlehash my_id
           attestation_leaf_hash scoped_nullifier nullifier_type_b32
           service_scope_hash service_subscope_hash proof_timestamp_b32))
       (list

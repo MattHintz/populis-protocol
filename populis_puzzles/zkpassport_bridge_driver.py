@@ -79,6 +79,7 @@ def build_bridge_spend(
     if int(bridge_coin.amount) <= 0:
         raise ValueError("bridge_coin amount must be greater than zero")
     _validate_signer_indices(signer_indices, threshold, len(validator_pubkeys))
+    bridge_coin_id = bridge_coin.name()
     bridge_message = compute_attestation_bridge_message(
         vault_launcher_id=vault_launcher_id,
         attestation_root=new_identity_attest_root,
@@ -88,6 +89,7 @@ def build_bridge_spend(
         vault_launcher_id=vault_launcher_id,
         attestation_root=new_identity_attest_root,
         bridge_policy_hash=bridge_policy_hash,
+        bridge_coin_id=bridge_coin_id,
         bridge_message=bridge_message,
         attestation_leaf_hash=attestation_leaf_hash,
         scoped_nullifier=scoped_nullifier,
@@ -114,7 +116,7 @@ def build_bridge_spend(
         puzzle=puzzle,
         solution=solution,
         bridge_policy_hash=bridge_policy_hash,
-        bridge_coin_id=bridge_coin.name(),
+        bridge_coin_id=bridge_coin_id,
         bridge_message=bridge_message,
         validator_message=validator_message,
     )

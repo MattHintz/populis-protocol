@@ -132,6 +132,7 @@ def compute_validator_bridge_message(
     vault_launcher_id: bytes32,
     attestation_root: bytes32,
     bridge_policy_hash: bytes32,
+    bridge_coin_id: bytes32,
     bridge_message: bytes32,
     attestation_leaf_hash: bytes32,
     scoped_nullifier: bytes32,
@@ -144,6 +145,7 @@ def compute_validator_bridge_message(
     _require_bytes32("vault_launcher_id", vault_launcher_id)
     _require_bytes32("attestation_root", attestation_root)
     _require_bytes32("bridge_policy_hash", bridge_policy_hash)
+    _require_bytes32("bridge_coin_id", bridge_coin_id)
     _require_bytes32("bridge_message", bridge_message)
     _require_bytes32("attestation_leaf_hash", attestation_leaf_hash)
     _require_bytes32("scoped_nullifier", scoped_nullifier)
@@ -159,6 +161,7 @@ def compute_validator_bridge_message(
                 vault_launcher_id,
                 attestation_root,
                 bridge_policy_hash,
+                bridge_coin_id,
                 bridge_message,
                 attestation_leaf_hash,
                 scoped_nullifier,
