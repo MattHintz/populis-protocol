@@ -16,6 +16,8 @@ shim's correctness is independent of the specific MIPS sub-tree it wraps.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from chia.types.blockchain_format.program import Program
 from chia.wallet.puzzles.load_clvm import load_clvm
@@ -39,7 +41,9 @@ from populis_puzzles.admin_authority_v2_driver import (
     SPEND_KEY_ADD_PROPOSE,
     SPEND_KEY_REMOVE_QUORUM,
     admin_authority_v2_inner_mod_hash,
+    admin_supermajority_threshold,
     admin_record_for_single_leaf,
+    build_admin_slot_add_preview,
     build_key_add_activate_solution,
     build_key_add_propose_solution,
     build_key_add_veto_solution,
@@ -52,6 +56,13 @@ from populis_puzzles.admin_authority_v2_driver import (
     launch_state_from_v1_allowlist,
     make_inner_puzzle,
     parse_inner_puzzle,
+)
+
+
+DESIGN_DOC = (
+    Path(__file__).resolve().parents[1]
+    / "research"
+    / "POPULIS_ADMIN_AUTHORITY_V2_DESIGN.md"
 )
 
 
@@ -165,6 +176,19 @@ def initial_state() -> dict:
 
 
 class TestConstruction:
+    def test_design_doc_pins_admin_roster_update_contract(self):
+        text = DESIGN_DOC.read_text(encoding="utf-8")
+
+        assert "`KEY_*` spend tags mutate keys inside an existing admin slot" in text
+        assert "They do not create new admin slots" in text
+        assert "0x07 ADMIN_ROSTER_UPDATE" in text
+        assert "atomically update both" in text
+        assert "ADMINS_HASH" in text
+        assert "MIPS_ROOT_HASH" in text
+        assert "threshold = ceil(2 * admin_count / 3)" in text
+        assert "2 admins -> 2-of-2" in text
+        assert "future operational admin decisions require both admin slots" in text
+
     def test_mod_hash_is_stable(self):
         """Re-loading the puzzle yields the same tree hash."""
         h1 = admin_authority_v2_inner_mod_hash()
@@ -187,6 +211,163 @@ class TestConstruction:
             admins_hash=admins_hash,
         ).get_tree_hash()
         assert h_a != h_b
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ADMIN_ROSTER_UPDATE preview contract (future tag 0x07).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestAdminRosterUpdatePreview:
+    def test_supermajority_threshold_examples(self):
+        assert [admin_supermajority_threshold(n) for n in range(1, 6)] == [
+            1,
+            2,
+            2,
+            3,
+            4,
+        ]
+        with pytest.raises(ValueError, match="admin_count must be >= 1"):
+            admin_supermajority_threshold(0)
+
+    def test_admin_slot_add_preview_updates_admins_and_mips_atomically(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        new_admin = AdminRecord(
+            admin_idx=1,
+            leaves=(LEAF_BLS_ADMIN_2,),
+            m_within=1,
+        )
+        pending_ops = (
+            PendingOp(
+                admin_idx=0,
+                op_kind=OP_KIND_ADD,
+                target_hash=LEAF_EIP712_ADMIN_1,
+                activates_at=CURRENT_BLOCK_HEIGHT + DEFAULT_COOLDOWN_BLOCKS,
+            ),
+        )
+        current_mips_root = bytes32(b"\xA0" * 32)
+        new_mips_root = bytes32(b"\xB0" * 32)
+
+        preview = build_admin_slot_add_preview(
+            current_admins=current_admins,
+            current_pending_ops=pending_ops,
+            new_admin=new_admin,
+            current_mips_root_hash=current_mips_root,
+            new_mips_root_hash=new_mips_root,
+            current_authority_version=7,
+            new_authority_version=8,
+        )
+
+        assert preview.new_admins == current_admins + (new_admin,)
+        assert preview.new_threshold == 2
+        assert preview.new_mips_root_hash == new_mips_root
+        assert preview.new_admins_hash == compute_admins_hash(preview.new_admins)
+        assert preview.new_pending_ops_hash == compute_pending_ops_hash(pending_ops)
+        assert preview.new_state_hash == compute_state_hash(
+            new_mips_root,
+            preview.new_admins_hash,
+            preview.new_pending_ops_hash,
+            8,
+        )
+
+    def test_admin_slot_add_preview_rejects_key_rotation_shapes(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        current_mips_root = bytes32(b"\xA0" * 32)
+        new_mips_root = bytes32(b"\xB0" * 32)
+
+        with pytest.raises(ValueError, match="already exists"):
+            build_admin_slot_add_preview(
+                current_admins=current_admins,
+                current_pending_ops=(),
+                new_admin=AdminRecord(
+                    admin_idx=0,
+                    leaves=(LEAF_EIP712_ADMIN_1,),
+                    m_within=1,
+                ),
+                current_mips_root_hash=current_mips_root,
+                new_mips_root_hash=new_mips_root,
+                current_authority_version=1,
+                new_authority_version=2,
+            )
+        with pytest.raises(ValueError, match="next contiguous slot 1"):
+            build_admin_slot_add_preview(
+                current_admins=current_admins,
+                current_pending_ops=(),
+                new_admin=AdminRecord(
+                    admin_idx=2,
+                    leaves=(LEAF_BLS_ADMIN_2,),
+                    m_within=1,
+                ),
+                current_mips_root_hash=current_mips_root,
+                new_mips_root_hash=new_mips_root,
+                current_authority_version=1,
+                new_authority_version=2,
+            )
+        with pytest.raises(ValueError, match="must change"):
+            build_admin_slot_add_preview(
+                current_admins=current_admins,
+                current_pending_ops=(),
+                new_admin=AdminRecord(
+                    admin_idx=1,
+                    leaves=(LEAF_BLS_ADMIN_2,),
+                    m_within=1,
+                ),
+                current_mips_root_hash=current_mips_root,
+                new_mips_root_hash=current_mips_root,
+                current_authority_version=1,
+                new_authority_version=2,
+            )
+
+    def test_admin_slot_add_preview_rejects_invalid_admin_records(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        current_mips_root = bytes32(b"\xA0" * 32)
+        new_mips_root = bytes32(b"\xB0" * 32)
+
+        with pytest.raises(ValueError, match="at least one leaf"):
+            build_admin_slot_add_preview(
+                current_admins=current_admins,
+                current_pending_ops=(),
+                new_admin=AdminRecord(admin_idx=1, leaves=(), m_within=1),
+                current_mips_root_hash=current_mips_root,
+                new_mips_root_hash=new_mips_root,
+                current_authority_version=1,
+                new_authority_version=2,
+            )
+        with pytest.raises(ValueError, match="m_within must be in"):
+            build_admin_slot_add_preview(
+                current_admins=current_admins,
+                current_pending_ops=(),
+                new_admin=AdminRecord(
+                    admin_idx=1,
+                    leaves=(LEAF_BLS_ADMIN_2,),
+                    m_within=2,
+                ),
+                current_mips_root_hash=current_mips_root,
+                new_mips_root_hash=new_mips_root,
+                current_authority_version=1,
+                new_authority_version=2,
+            )
+        with pytest.raises(ValueError, match="max_admins"):
+            build_admin_slot_add_preview(
+                current_admins=current_admins,
+                current_pending_ops=(),
+                new_admin=AdminRecord(
+                    admin_idx=1,
+                    leaves=(LEAF_BLS_ADMIN_2,),
+                    m_within=1,
+                ),
+                current_mips_root_hash=current_mips_root,
+                new_mips_root_hash=new_mips_root,
+                current_authority_version=1,
+                new_authority_version=2,
+                max_admins=1,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -139,6 +139,17 @@ class PendingOp:
         )
 
 
+@dataclass(frozen=True)
+class AdminRosterUpdatePreview:
+    new_admins: tuple[AdminRecord, ...]
+    new_threshold: int
+    new_mips_root_hash: bytes32
+    new_admins_hash: bytes32
+    new_pending_ops_hash: bytes32
+    new_authority_version: int
+    new_state_hash: bytes32
+
+
 def compute_admins_hash(admins: Sequence[AdminRecord]) -> bytes32:
     """sha256tree of the admins list. Matches on-chain ADMINS_HASH."""
     return bytes32(Program.to([a.to_program() for a in admins]).get_tree_hash())
@@ -170,6 +181,98 @@ def compute_state_hash(
             [mips_root_hash, admins_hash, pending_ops_hash, authority_version]
         ).get_tree_hash()
     )
+
+
+def admin_supermajority_threshold(admin_count: int) -> int:
+    if admin_count < 1:
+        raise ValueError(f"admin_count must be >= 1, got {admin_count}")
+    return (2 * admin_count + 2) // 3
+
+
+def build_admin_slot_add_preview(
+    *,
+    current_admins: Sequence[AdminRecord],
+    current_pending_ops: Sequence[PendingOp],
+    new_admin: AdminRecord,
+    current_mips_root_hash: bytes32,
+    new_mips_root_hash: bytes32,
+    current_authority_version: int,
+    new_authority_version: int,
+    max_admins: int = DEFAULT_MAX_ADMINS,
+    max_keys_per_admin: int = DEFAULT_MAX_KEYS_PER_ADMIN,
+) -> AdminRosterUpdatePreview:
+    current_admins_tuple = tuple(current_admins)
+    if not current_admins_tuple:
+        raise ValueError("current_admins must contain at least one admin")
+    if len(current_admins_tuple) >= max_admins:
+        raise ValueError(f"admin roster already has max_admins ({max_admins})")
+    if new_authority_version <= current_authority_version:
+        raise ValueError("new_authority_version must be greater than current")
+    if len(current_mips_root_hash) != 32:
+        raise ValueError("current_mips_root_hash must be 32 bytes")
+    if len(new_mips_root_hash) != 32:
+        raise ValueError("new_mips_root_hash must be 32 bytes")
+    if new_mips_root_hash == current_mips_root_hash:
+        raise ValueError("new_mips_root_hash must change when adding an admin slot")
+
+    seen_admin_indices: set[int] = set()
+    for admin in current_admins_tuple:
+        _validate_admin_record(admin, max_keys_per_admin)
+        if admin.admin_idx in seen_admin_indices:
+            raise ValueError(f"duplicate admin_idx {admin.admin_idx}")
+        seen_admin_indices.add(admin.admin_idx)
+
+    _validate_admin_record(new_admin, max_keys_per_admin)
+    if new_admin.admin_idx in seen_admin_indices:
+        raise ValueError(f"admin_idx {new_admin.admin_idx} already exists")
+    expected_admin_idx = max(seen_admin_indices) + 1
+    if new_admin.admin_idx != expected_admin_idx:
+        raise ValueError(
+            f"new admin_idx must be next contiguous slot {expected_admin_idx}, "
+            f"got {new_admin.admin_idx}"
+        )
+
+    new_admins = current_admins_tuple + (new_admin,)
+    new_admins_hash = compute_admins_hash(new_admins)
+    new_pending_ops_hash = compute_pending_ops_hash(current_pending_ops)
+    new_state_hash = compute_state_hash(
+        new_mips_root_hash,
+        new_admins_hash,
+        new_pending_ops_hash,
+        new_authority_version,
+    )
+    return AdminRosterUpdatePreview(
+        new_admins=new_admins,
+        new_threshold=admin_supermajority_threshold(len(new_admins)),
+        new_mips_root_hash=new_mips_root_hash,
+        new_admins_hash=new_admins_hash,
+        new_pending_ops_hash=new_pending_ops_hash,
+        new_authority_version=new_authority_version,
+        new_state_hash=new_state_hash,
+    )
+
+
+def _validate_admin_record(admin: AdminRecord, max_keys_per_admin: int) -> None:
+    if admin.admin_idx < 0:
+        raise ValueError(f"admin_idx must be non-negative, got {admin.admin_idx}")
+    if not admin.leaves:
+        raise ValueError(f"admin {admin.admin_idx} must have at least one leaf")
+    if len(admin.leaves) > max_keys_per_admin:
+        raise ValueError(
+            f"admin {admin.admin_idx} has {len(admin.leaves)} leaves, "
+            f"max is {max_keys_per_admin}"
+        )
+    if admin.m_within < 1 or admin.m_within > len(admin.leaves):
+        raise ValueError(
+            f"admin {admin.admin_idx} m_within must be in [1, {len(admin.leaves)}]"
+        )
+    seen_leaves: set[bytes32] = set()
+    for leaf in admin.leaves:
+        if len(leaf) != 32:
+            raise ValueError(f"admin {admin.admin_idx} leaf must be 32 bytes")
+        if leaf in seen_leaves:
+            raise ValueError(f"admin {admin.admin_idx} has duplicate leaf")
+        seen_leaves.add(leaf)
 
 
 # ─────────────────────────────────────────────────────────────────────────
