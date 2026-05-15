@@ -55,6 +55,7 @@ from populis_puzzles.admin_authority_v2_driver import (
     build_operational_solution,
     compute_admins_hash,
     compute_pending_ops_hash,
+    compute_roster_update_binding_hash,
     compute_state_hash,
     launch_state_from_v1_allowlist,
     make_inner_puzzle,
@@ -134,6 +135,17 @@ def _first_create_coin_condition(result: Program) -> tuple[bytes32, int]:
             amount = int(cond.rest().rest().first().as_int())
             return bytes32(puzzle_hash), amount
     raise AssertionError("No CREATE_COIN emitted")
+
+
+def _first_agg_sig_me_condition(result: Program) -> tuple[bytes, bytes]:
+    for cond in result.as_iter():
+        if int(cond.first().as_int()) == 50:
+            pubkey = cond.rest().first().atom
+            message = cond.rest().rest().first().atom
+            assert pubkey is not None
+            assert message is not None
+            return pubkey, message
+    raise AssertionError("No AGG_SIG_ME emitted")
 
 
 _BLS_MEMBER_FIXTURE: Program | None = None
@@ -381,6 +393,66 @@ class TestAdminRosterUpdatePreview:
                 new_authority_version=2,
                 max_admins=1,
             )
+
+    def test_roster_update_binding_hash_changes_with_target_state(self):
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        pending_ops = (
+            PendingOp(
+                admin_idx=0,
+                op_kind=OP_KIND_ADD,
+                target_hash=LEAF_EIP712_ADMIN_1,
+                activates_at=CURRENT_BLOCK_HEIGHT + DEFAULT_COOLDOWN_BLOCKS,
+            ),
+        )
+        new_admin_a = AdminRecord(
+            admin_idx=1,
+            leaves=(LEAF_BLS_ADMIN_2,),
+            m_within=1,
+        )
+        new_admin_b = AdminRecord(
+            admin_idx=1,
+            leaves=(LEAF_EIP712_ADMIN_2,),
+            m_within=1,
+        )
+        base = compute_roster_update_binding_hash(
+            current_mips_root_hash=bytes32(b"\xA0" * 32),
+            current_admins_hash=compute_admins_hash(current_admins),
+            current_pending_ops_hash=compute_pending_ops_hash(pending_ops),
+            current_authority_version=7,
+            new_admins_hash=compute_admins_hash(current_admins + (new_admin_a,)),
+            new_mips_root_hash=bytes32(b"\xB0" * 32),
+            new_authority_version=8,
+        )
+
+        assert base != compute_roster_update_binding_hash(
+            current_mips_root_hash=bytes32(b"\xA0" * 32),
+            current_admins_hash=compute_admins_hash(current_admins),
+            current_pending_ops_hash=compute_pending_ops_hash(pending_ops),
+            current_authority_version=7,
+            new_admins_hash=compute_admins_hash(current_admins + (new_admin_b,)),
+            new_mips_root_hash=bytes32(b"\xB0" * 32),
+            new_authority_version=8,
+        )
+        assert base != compute_roster_update_binding_hash(
+            current_mips_root_hash=bytes32(b"\xA0" * 32),
+            current_admins_hash=compute_admins_hash(current_admins),
+            current_pending_ops_hash=compute_pending_ops_hash(pending_ops),
+            current_authority_version=7,
+            new_admins_hash=compute_admins_hash(current_admins + (new_admin_a,)),
+            new_mips_root_hash=bytes32(b"\xB1" * 32),
+            new_authority_version=8,
+        )
+        assert base != compute_roster_update_binding_hash(
+            current_mips_root_hash=bytes32(b"\xA0" * 32),
+            current_admins_hash=compute_admins_hash(current_admins),
+            current_pending_ops_hash=EMPTY_LIST_HASH,
+            current_authority_version=7,
+            new_admins_hash=compute_admins_hash(current_admins + (new_admin_a,)),
+            new_mips_root_hash=bytes32(b"\xB0" * 32),
+            new_authority_version=8,
+        )
 
 
 class TestAdminRosterUpdateSpendContract:
@@ -1955,6 +2027,52 @@ class TestRealMemberPuzzleIntegration:
         assert agg_message == rotation_intent, (
             "Approver's signature should bind to the rotation intent"
         )
+
+    def test_admin_roster_update_forces_real_bls_mips_to_sign_binding_hash(self):
+        bls_mips_reveal = _bls_member_fixture().curry(REAL_BLS_PUBKEY)
+        current_mips_root = bytes32(bls_mips_reveal.get_tree_hash())
+        current_admins = (
+            AdminRecord(admin_idx=0, leaves=(LEAF_BLS_ADMIN_1,), m_within=1),
+        )
+        new_admin = AdminRecord(
+            admin_idx=1,
+            leaves=(LEAF_BLS_ADMIN_2,),
+            m_within=1,
+        )
+        new_mips_root = bytes32(b"\xB0" * 32)
+        expected_binding_hash = compute_roster_update_binding_hash(
+            current_mips_root_hash=current_mips_root,
+            current_admins_hash=compute_admins_hash(current_admins),
+            current_pending_ops_hash=EMPTY_LIST_HASH,
+            current_authority_version=INITIAL_AUTHORITY_VERSION,
+            new_admins_hash=compute_admins_hash(current_admins + (new_admin,)),
+            new_mips_root_hash=new_mips_root,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+        )
+        inner = make_inner_puzzle(
+            mips_root_hash=current_mips_root,
+            admins_hash=compute_admins_hash(current_admins),
+            pending_ops_hash=EMPTY_LIST_HASH,
+            authority_version=INITIAL_AUTHORITY_VERSION,
+        )
+        sol = build_admin_roster_update_solution(
+            my_amount=SINGLETON_AMOUNT,
+            new_authority_version=INITIAL_AUTHORITY_VERSION + 1,
+            current_authority_version=INITIAL_AUTHORITY_VERSION,
+            current_admins=current_admins,
+            current_pending_ops=(),
+            current_mips_reveal=bls_mips_reveal,
+            current_mips_solution=Program.to([REAL_SIGNED_MESSAGE]),
+            new_admin=new_admin,
+            new_mips_root_hash=new_mips_root,
+        )
+
+        result = inner.run(sol)
+        agg_pubkey, agg_message = _first_agg_sig_me_condition(result)
+
+        assert agg_pubkey == REAL_BLS_PUBKEY
+        assert agg_message == expected_binding_hash
+        assert agg_message != REAL_SIGNED_MESSAGE
 
 
 # ─────────────────────────────────────────────────────────────────────────

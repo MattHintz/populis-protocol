@@ -190,6 +190,46 @@ def compute_state_hash(
     )
 
 
+def compute_roster_update_binding_hash(
+    *,
+    current_mips_root_hash: bytes32,
+    current_admins_hash: bytes32,
+    current_pending_ops_hash: bytes32,
+    current_authority_version: int,
+    new_admins_hash: bytes32,
+    new_mips_root_hash: bytes32,
+    new_authority_version: int,
+) -> bytes32:
+    if len(current_mips_root_hash) != 32:
+        raise ValueError("current_mips_root_hash must be 32 bytes")
+    if len(current_admins_hash) != 32:
+        raise ValueError("current_admins_hash must be 32 bytes")
+    if len(current_pending_ops_hash) != 32:
+        raise ValueError("current_pending_ops_hash must be 32 bytes")
+    if current_authority_version < 0:
+        raise ValueError("current_authority_version must be non-negative")
+    if len(new_admins_hash) != 32:
+        raise ValueError("new_admins_hash must be 32 bytes")
+    if len(new_mips_root_hash) != 32:
+        raise ValueError("new_mips_root_hash must be 32 bytes")
+    if new_authority_version < 0:
+        raise ValueError("new_authority_version must be non-negative")
+    return bytes32(
+        Program.to(
+            [
+                SPEND_ADMIN_ROSTER_UPDATE,
+                current_mips_root_hash,
+                current_admins_hash,
+                current_pending_ops_hash,
+                current_authority_version,
+                new_admins_hash,
+                new_mips_root_hash,
+                new_authority_version,
+            ]
+        ).get_tree_hash()
+    )
+
+
 def admin_supermajority_threshold(admin_count: int) -> int:
     if admin_count < 1:
         raise ValueError(f"admin_count must be >= 1, got {admin_count}")
@@ -581,6 +621,7 @@ def build_admin_roster_update_solution(
     *,
     my_amount: int,
     new_authority_version: int,
+    current_authority_version: int | None = None,
     current_admins: Sequence[AdminRecord],
     current_pending_ops: Sequence[PendingOp],
     current_mips_reveal: Program,
@@ -588,14 +629,29 @@ def build_admin_roster_update_solution(
     new_admin: AdminRecord,
     new_mips_root_hash: bytes32,
 ) -> Program:
+    current_admins_tuple = tuple(current_admins)
+    current_pending_ops_tuple = tuple(current_pending_ops)
+    new_admins_hash = compute_admins_hash(current_admins_tuple + (new_admin,))
+    current_mips_root_hash = bytes32(current_mips_reveal.get_tree_hash())
+    if current_authority_version is None:
+        current_authority_version = new_authority_version - 1
+    compute_roster_update_binding_hash(
+        current_mips_root_hash=current_mips_root_hash,
+        current_admins_hash=compute_admins_hash(current_admins_tuple),
+        current_pending_ops_hash=compute_pending_ops_hash(current_pending_ops_tuple),
+        current_authority_version=current_authority_version,
+        new_admins_hash=new_admins_hash,
+        new_mips_root_hash=new_mips_root_hash,
+        new_authority_version=new_authority_version,
+    )
     return Program.to(
         [
             SPEND_ADMIN_ROSTER_UPDATE,
             my_amount,
             new_authority_version,
             [
-                [a.to_program() for a in current_admins],
-                [p.to_program() for p in current_pending_ops],
+                [a.to_program() for a in current_admins_tuple],
+                [p.to_program() for p in current_pending_ops_tuple],
                 current_mips_reveal,
                 current_mips_solution,
                 new_admin.to_program(),
@@ -632,6 +688,7 @@ def build_admin_slot_add_spend(
     )
     solution = build_admin_roster_update_solution(
         my_amount=my_amount,
+        current_authority_version=current_authority_version,
         new_authority_version=preview.new_authority_version,
         current_admins=current_admins,
         current_pending_ops=current_pending_ops,

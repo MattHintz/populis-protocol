@@ -164,6 +164,19 @@
             new_authority_version))
   )
 
+  (defun-inline roster-update-binding-hash
+      (new_admins_hash new_mips_root_hash new_authority_version)
+    (sha256tree
+      (list SPEND_ADMIN_ROSTER_UPDATE
+            MIPS_ROOT_HASH
+            ADMINS_HASH
+            PENDING_KEY_OPS_HASH
+            AUTHORITY_VERSION
+            new_admins_hash
+            new_mips_root_hash
+            new_authority_version))
+  )
+
   ;; Compute the puzzle hash of a v2 singleton inner curried with new state.
   ;; The immutable curried params (MAX_ADMINS, COOLDOWN_BLOCKS, etc.) are
   ;; folded in via their existing tree-hashes — they don't change across
@@ -1033,7 +1046,13 @@
       (not (> (f (r (r new_admin_record)))
               (list-length (f (r new_admin_record)))))
       (merge-lists
-        (a current_mips_reveal current_mips_solution)
+        (a current_mips_reveal
+          (c
+            (roster-update-binding-hash
+              (sha256tree (append-element current_admins_list new_admin_record))
+              new_mips_root_hash
+              new_authority_version)
+            current_mips_solution))
         (emit-shim-conditions
           new_mips_root_hash
           (sha256tree (append-element current_admins_list new_admin_record))

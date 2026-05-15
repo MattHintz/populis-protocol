@@ -81,12 +81,10 @@ PUZZLE_FILENAMES = (
 # All four A.x puzzles' mod hashes therefore changed; the new values
 # are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
-    # 2026-05-09: Brick 10 added zkpassport_bridge_message.clsp.
-    # Adding a puzzle to PUZZLE_FILENAMES extends the canonical order,
-    # so the all-puzzle checksum changes even though no existing
-    # puzzle's bytecode did.
-    # The new bridge policy hash is derived by zkpassport_bridge_driver.py.
-    "3fbfbf5e81b068d545915e9be943f01ac935fcd8f2574a3f55b21aa1cd13f5c5"
+    # 2026-05-14: F-23 hardening updated admin_authority_v2_inner.clsp
+    # so ADMIN_ROSTER_UPDATE prepends a roster-update binding hash to
+    # the current MIPS solution before running the reveal.
+    "c75bdcfe1af0b6d3e5e8e548e2b88ca52cf423071d34572bfbd1791c37466bdd"
 )
 
 # ── Cache ──
