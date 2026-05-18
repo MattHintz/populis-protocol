@@ -35,3 +35,25 @@ def test_fixture_remains_unsigned_and_unbroadcast() -> None:
     assert "broadcast" not in encoded
     assert "jwt" not in encoded
     assert "secret" not in encoded
+
+
+def test_fixture_includes_real_agg_sig_me_binding_case() -> None:
+    fixture = dump_a5_roster_candidate_fixture.build_fixture()
+    cases = fixture["cases"]
+    agg_cases = [
+        case
+        for case in cases
+        if case["expected"]["bounded_mips_execution_report"]["agg_sig_me_conditions"]
+    ]
+    assert len(agg_cases) == 1
+    case = agg_cases[0]
+    binding_hash = case["request"]["verifiedSpendBuilderIntake"]["roster_transition"][
+        "roster_update_binding_hash"
+    ]
+    agg_sig_me = case["expected"]["bounded_mips_execution_report"]["agg_sig_me_conditions"]
+    assert agg_sig_me == [
+        {
+            "public_key": "0x" + "42" * 48,
+            "message": binding_hash,
+        }
+    ]
