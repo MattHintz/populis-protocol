@@ -19,6 +19,33 @@ from populis_puzzles.zkpassport_attestation import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Testnet11 validator configuration (1-of-1, single operator validator node).
+# These constants are derived once and pinned here so the protocol, API, and
+# portal all reference the same authoritative values.
+#
+# To regenerate for a new validator keypair:
+#   seed  = secrets.token_bytes(32)
+#   sk    = AugSchemeMPL.key_gen(seed)
+#   pk    = sk.get_g1()
+#   hash  = make_bridge_policy_hash([bytes(pk)], threshold=1)
+#
+# Store the seed in the API .env as POPULIS_ZKPASSPORT_VALIDATOR_SEED_HEX.
+# ---------------------------------------------------------------------------
+
+TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY_HEX: str = (
+    "a8f9b0c1f992c49210fc726fc610885b966f84747126753659c6c3f8ae5bf3ba"
+    "f5b6e1a399fc8a749daf45dd74efac4c"
+)
+TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY: bytes = bytes.fromhex(
+    TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY_HEX
+)
+TESTNET11_ZKPASSPORT_VALIDATOR_THRESHOLD: int = 1
+
+TESTNET11_ZKPASSPORT_BRIDGE_POLICY_HASH: bytes32 = bytes32.fromhex(
+    "c87f45cd23d052c88256de8823a4a01f40da4e2066156f48f3b3dfc0a50350d7"
+)
+
 _ZKPASSPORT_BRIDGE_MOD: Program | None = None
 
 
@@ -255,6 +282,10 @@ def _uint_to_bytes32(value: int) -> bytes:
 __all__ = [
     "BridgeSpendArtifacts",
     "BridgeVaultEnrollmentBundle",
+    "TESTNET11_ZKPASSPORT_BRIDGE_POLICY_HASH",
+    "TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY",
+    "TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY_HEX",
+    "TESTNET11_ZKPASSPORT_VALIDATOR_THRESHOLD",
     "build_bridge_and_vault_update_identity_bundle",
     "build_bridge_spend",
     "make_bridge_policy_hash",

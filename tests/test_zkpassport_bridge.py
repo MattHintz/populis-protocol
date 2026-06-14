@@ -21,6 +21,10 @@ from populis_puzzles.zkpassport_attestation import (
     compute_validator_bridge_message,
 )
 from populis_puzzles.zkpassport_bridge_driver import (
+    TESTNET11_ZKPASSPORT_BRIDGE_POLICY_HASH,
+    TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY,
+    TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY_HEX,
+    TESTNET11_ZKPASSPORT_VALIDATOR_THRESHOLD,
     build_bridge_and_vault_update_identity_bundle,
     build_bridge_spend,
     make_bridge_policy_hash,
@@ -206,3 +210,32 @@ def test_driver_builds_bridge_and_vault_identity_spends_with_matching_announceme
     ])
     vault_conds = current_inner.run(vault_solution).as_python()
     assert [OP_ASSERT_COIN_ANN, expected_assertion] in vault_conds
+
+
+class TestTestnet11ValidatorConstants:
+    def test_pubkey_hex_is_48_bytes(self):
+        assert len(TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY_HEX) == 96
+        assert bytes.fromhex(TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY_HEX) == TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY
+
+    def test_pubkey_bytes_is_48_bytes(self):
+        assert len(TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY) == 48
+
+    def test_threshold_is_one_of_one(self):
+        assert TESTNET11_ZKPASSPORT_VALIDATOR_THRESHOLD == 1
+
+    def test_bridge_policy_hash_matches_computed(self):
+        computed = make_bridge_policy_hash(
+            [TESTNET11_ZKPASSPORT_VALIDATOR_PUBKEY],
+            TESTNET11_ZKPASSPORT_VALIDATOR_THRESHOLD,
+        )
+        assert computed == TESTNET11_ZKPASSPORT_BRIDGE_POLICY_HASH, (
+            f"Pinned hash {TESTNET11_ZKPASSPORT_BRIDGE_POLICY_HASH.hex()!r} does not match "
+            f"computed {computed.hex()!r} — re-run make_bridge_policy_hash and update the constant."
+        )
+
+    def test_bridge_policy_hash_is_32_bytes(self):
+        assert len(TESTNET11_ZKPASSPORT_BRIDGE_POLICY_HASH) == 32
+
+    def test_different_pubkey_gives_different_policy_hash(self):
+        other = make_bridge_policy_hash([b"\x11" * 48], 1)
+        assert other != TESTNET11_ZKPASSPORT_BRIDGE_POLICY_HASH
