@@ -371,7 +371,7 @@ class TestVaultBLSAcceptOffer:
             CURRENT_TIMESTAMP,
             None,
         )
-        assert sol.get_tree_hash().hex() == "8ed1ff5aa20d26c56343e3ad838789f03d2c81a778bfb509b66615271733ad9e"
+        assert sol.get_tree_hash().hex() == "5dba93984fe20060ed0e419f5a9cd582afa02f932b7648b7cc7fc484f3a0bb89"
         fields = list(sol.as_iter())
         params = list(fields[4].as_iter())
         assert bytes32(fields[0].as_atom()) == my_id

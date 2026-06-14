@@ -159,16 +159,13 @@ def vault_discovery_hint(auth_type: int, owner_pubkey: bytes) -> bytes32:
 # in populis_puzzles/vault_singleton_inner.clsp to match.  See the eip712 audit
 # helper `eip712_prefix_and_domain_separator()` below — it is the generator.
 #
-# chainId = 1 is chosen deliberately for maximum EVM-wallet compatibility:
-# MetaMask and most wallets show clear "Ethereum mainnet" UX prompts for signTypedData_v4
-# with chainId=1, whereas chainId=0 triggers scary "unknown-network" warnings or outright
-# rejections.  The signature is a typed-data attestation — never a valid Ethereum tx —
-# so binding it to chainId=1 creates no cross-chain replay hazard: no EVM contract
-# with the same (name,version,typeHash) will ever exist.
+# chainId = 84532 (Base Sepolia) — matches the deployed PopulisZkPassportAttestationEmitter
+# on Base Sepolia.  The signature is a typed-data attestation bound to the chain where
+# the emitter lives; update this if the emitter is redeployed to a different chain.
 # ---------------------------------------------------------------------------
 EIP712_DOMAIN_NAME: str = "Populis Protocol"
 EIP712_DOMAIN_VERSION: str = "1"
-EIP712_DOMAIN_CHAIN_ID: int = 1
+EIP712_DOMAIN_CHAIN_ID: int = 84532
 
 # Typehash: keccak256("PopulisVaultSpend(bytes32 spend_case,bytes32 deed_launcher_id,bytes32 vault_coin_id)")
 # Mirrors POPULIS_VAULT_TYPEHASH in vault_singleton_inner.clsp.
