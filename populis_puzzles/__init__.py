@@ -66,6 +66,12 @@ PUZZLE_FILENAMES = (
     # blocks signature replay across transitions / proposals.
     "mint_proposal_inner_v2.clsp",
     "zkpassport_bridge_message.clsp",
+    # Vault upgrade — vault_version_registry singleton.  On-chain canonical vault
+    # version source: VAULT_INNER_MOD_HASH + CANONICAL_PARAMS_HASH + monotonic
+    # VAULT_VERSION, with two publish paths (admin_authority_v2 params-only
+    # fast-track / PGT-tracker routine).  See
+    # research/POPULIS_VAULT_UPGRADE_DESIGN.md and the puzzle docstring.
+    "vault_version_registry_inner.clsp",
 )
 
 # ── Frozen checksum — update after every intentional puzzle change ──
@@ -81,10 +87,17 @@ PUZZLE_FILENAMES = (
 # All four A.x puzzles' mod hashes therefore changed; the new values
 # are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
-    # 2026-05-14: F-23 hardening updated admin_authority_v2_inner.clsp
-    # so ADMIN_ROSTER_UPDATE prepends a roster-update binding hash to
-    # the current MIPS solution before running the reveal.
-    "c75bdcfe1af0b6d3e5e8e548e2b88ca52cf423071d34572bfbd1791c37466bdd"
+    # 2026-06-16: refrozen for the vault-upgrade feature.  This value also
+    # absorbs a previously-unfrozen *committed* change — c8eef7e
+    # (eip712: vault chainId -> Base Sepolia 84532) changed
+    # vault_singleton_inner's mod hash but did not refreeze — so the frozen
+    # value had silently drifted from the committed puzzles.  Deltas since the
+    # prior freeze (c75bdcf):
+    #   - c8eef7e: vault EIP-712 chainId updated to Base Sepolia (84532).
+    #   - ceb141a: vault_singleton_inner gained the 'm' (migrate) spend case
+    #     for the vault upgrade flow (research/POPULIS_VAULT_UPGRADE_DESIGN.md).
+    #   - vault_version_registry_inner.clsp added to PUZZLE_FILENAMES.
+    "87f7acbb66922a0012ab5e8accf7ef08a2c75e25c872d88833b5ac102bbb4adf"
 )
 
 # ── Cache ──
