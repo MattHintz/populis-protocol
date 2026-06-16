@@ -92,6 +92,56 @@ def compute_content_hash(
     )
 
 
+def compute_canonical_params_hash(
+    *,
+    pool_singleton_mod_hash: bytes32,
+    pool_launcher_id: bytes32,
+    pool_singleton_launcher_puzzle_hash: bytes32,
+    zkpassport_bridge_policy_hash: bytes32,
+) -> bytes32:
+    """Canonical hash of the protocol-level (shared) vault params.
+
+    Per ``research/POPULIS_VAULT_UPGRADE_DESIGN.md``::
+
+        CANONICAL_PARAMS_HASH = sha256tree(list
+            POOL_SINGLETON_MOD_HASH
+            POOL_LAUNCHER_ID
+            POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
+            ZKPASSPORT_BRIDGE_POLICY_HASH)
+
+    These four are the immutable, protocol-wide curried params of
+    ``vault_singleton_inner.clsp`` — everything EXCEPT the per-user identity
+    (owner pubkey, auth type, members root, identity attest root, singleton
+    struct).  A params-only upgrade (e.g. the bridge-policy-hash repair or a
+    pool rotation) changes exactly this hash while the vault CODE
+    (``VAULT_INNER_MOD_HASH``) stays byte-identical.
+
+    The ORDER is canonical and load-bearing: the registry's published
+    ``CANONICAL_PARAMS_HASH`` and a live vault's computed hash must agree
+    byte-for-byte for outdated detection to work, so any client (including the
+    TypeScript portal) MUST hash these four atoms, in this order, via
+    sha256tree.
+    """
+    for name, value in (
+        ("pool_singleton_mod_hash", pool_singleton_mod_hash),
+        ("pool_launcher_id", pool_launcher_id),
+        ("pool_singleton_launcher_puzzle_hash", pool_singleton_launcher_puzzle_hash),
+        ("zkpassport_bridge_policy_hash", zkpassport_bridge_policy_hash),
+    ):
+        if len(value) != 32:
+            raise ValueError(f"{name} must be 32 bytes, got {len(value)}")
+    return bytes32(
+        Program.to(
+            [
+                pool_singleton_mod_hash,
+                pool_launcher_id,
+                pool_singleton_launcher_puzzle_hash,
+                zkpassport_bridge_policy_hash,
+            ]
+        ).get_tree_hash()
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Inner puzzle construction.
 # ─────────────────────────────────────────────────────────────────────────
@@ -401,4 +451,50 @@ def build_routine_spend(
         new_vault_version=new_vault_version,
         my_amount=my_amount,
         path_tag=TAG_ROUTINE,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Outdated detection (client-side, no backend).
+#
+# A vault is CURRENT iff its (vault_inner_mod_hash, canonical_params_hash)
+# equals the registry's (VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH); else it
+# is OUTDATED and an upgrade to ``registry.vault_version`` is offered.  The
+# portal reimplements this in TypeScript against coinset.org reads; this Python
+# version is the reference the tests pin.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def canonical_params_hash_from_vault_inner(curried_vault_inner: Program) -> bytes32:
+    """Compute a live vault's CANONICAL_PARAMS_HASH from its inner puzzle reveal.
+
+    Uncurries ``vault_singleton_inner.clsp`` (validating it is one) and hashes
+    its four protocol-level params.  This is the value the portal compares
+    against ``registry.canonical_params_hash`` to detect outdated vaults.
+    """
+    from populis_puzzles.vault_driver import parse_vault_inner_puzzle
+
+    state = parse_vault_inner_puzzle(curried_vault_inner)
+    return compute_canonical_params_hash(
+        pool_singleton_mod_hash=state.pool_singleton_mod_hash,
+        pool_launcher_id=state.pool_launcher_id,
+        pool_singleton_launcher_puzzle_hash=state.pool_launcher_puzzle_hash,
+        zkpassport_bridge_policy_hash=state.zkpassport_bridge_policy_hash,
+    )
+
+
+def is_vault_current(
+    *,
+    registry: VaultVersionRegistryState,
+    vault_inner_mod_hash: bytes32,
+    vault_canonical_params_hash: bytes32,
+) -> bool:
+    """Return True iff a vault matches the registry's canonical version.
+
+    CURRENT iff BOTH the vault CODE (mod hash) AND the protocol params hash
+    equal the registry's.  Any mismatch => OUTDATED (an upgrade is available).
+    """
+    return (
+        bytes32(vault_inner_mod_hash) == registry.vault_inner_mod_hash
+        and bytes32(vault_canonical_params_hash) == registry.canonical_params_hash
     )

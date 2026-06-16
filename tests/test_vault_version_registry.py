@@ -33,8 +33,11 @@ from populis_puzzles.vault_version_registry_driver import (
     VaultVersionRegistryState,
     build_fasttrack_spend,
     build_routine_spend,
+    canonical_params_hash_from_vault_inner,
     compute_authorizer_announcement_id,
+    compute_canonical_params_hash,
     compute_content_hash,
+    is_vault_current,
     make_inner_puzzle,
     parse_inner_puzzle,
     vault_version_registry_inner_mod,
@@ -369,3 +372,141 @@ class TestGuards:
         )
         with pytest.raises(ValueError):
             _run(_curry(), sol)
+
+
+class TestCanonicalParamsHashAndDetection:
+    """compute_canonical_params_hash + outdated detection (Brick 4b).
+
+    These pin the canonical convention the registry publish path and the portal
+    detection path BOTH rely on: CANONICAL_PARAMS_HASH = sha256tree of the four
+    protocol-level vault params, in a fixed order.
+    """
+
+    POOL_MOD = bytes32(b"\x71" * 32)
+    POOL_LAUNCHER = bytes32(b"\x72" * 32)
+    POOL_LAUNCHER_PH = bytes32(b"\x73" * 32)
+    BRIDGE_HASH = bytes32(b"\x74" * 32)
+
+    def _cph(self, **overrides):
+        params = dict(
+            pool_singleton_mod_hash=self.POOL_MOD,
+            pool_launcher_id=self.POOL_LAUNCHER,
+            pool_singleton_launcher_puzzle_hash=self.POOL_LAUNCHER_PH,
+            zkpassport_bridge_policy_hash=self.BRIDGE_HASH,
+        )
+        params.update(overrides)
+        return compute_canonical_params_hash(**params)
+
+    def test_matches_sha256tree_of_four_atoms_in_order(self):
+        """This IS the cross-language contract the TS portal must reproduce."""
+        expected = bytes32(
+            Program.to(
+                [self.POOL_MOD, self.POOL_LAUNCHER, self.POOL_LAUNCHER_PH, self.BRIDGE_HASH]
+            ).get_tree_hash()
+        )
+        assert self._cph() == expected
+
+    def test_is_deterministic(self):
+        assert self._cph() == self._cph()
+
+    def test_is_order_sensitive(self):
+        # Swapping two distinct params must change the hash (arg-order guard).
+        swapped = compute_canonical_params_hash(
+            pool_singleton_mod_hash=self.POOL_LAUNCHER,
+            pool_launcher_id=self.POOL_MOD,
+            pool_singleton_launcher_puzzle_hash=self.POOL_LAUNCHER_PH,
+            zkpassport_bridge_policy_hash=self.BRIDGE_HASH,
+        )
+        assert swapped != self._cph()
+
+    def test_changes_with_each_param(self):
+        assert self._cph(pool_singleton_mod_hash=bytes32(b"\x99" * 32)) != self._cph()
+        assert self._cph(pool_launcher_id=bytes32(b"\x99" * 32)) != self._cph()
+        assert self._cph(pool_singleton_launcher_puzzle_hash=bytes32(b"\x99" * 32)) != self._cph()
+        assert self._cph(zkpassport_bridge_policy_hash=bytes32(b"\x99" * 32)) != self._cph()
+
+    def test_rejects_non_32_byte_param(self):
+        with pytest.raises(ValueError):
+            compute_canonical_params_hash(
+                pool_singleton_mod_hash=b"\x71" * 31,
+                pool_launcher_id=self.POOL_LAUNCHER,
+                pool_singleton_launcher_puzzle_hash=self.POOL_LAUNCHER_PH,
+                zkpassport_bridge_policy_hash=self.BRIDGE_HASH,
+            )
+
+    def test_from_vault_inner_matches_explicit_params(self):
+        """A live vault's canonical params hash == the explicit hash of its
+        four protocol-level curried params."""
+        from populis_puzzles.vault_driver import (
+            AUTH_TYPE_BLS,
+            one_leaf_merkle_root,
+            puzzle_for_vault_inner,
+        )
+
+        owner = bytes(48)
+        pool_launcher = bytes32(b"\x55" * 32)
+        bridge = bytes32(b"\x66" * 32)
+        vault_inner = puzzle_for_vault_inner(
+            bytes32(b"\xaa" * 32),  # per-user vault launcher (not a canonical param)
+            owner,
+            AUTH_TYPE_BLS,
+            one_leaf_merkle_root(owner),
+            pool_launcher,
+            zkpassport_bridge_policy_hash=bridge,
+        )
+        got = canonical_params_hash_from_vault_inner(vault_inner)
+        expected = compute_canonical_params_hash(
+            pool_singleton_mod_hash=bytes32(SINGLETON_MOD_HASH),
+            pool_launcher_id=pool_launcher,
+            pool_singleton_launcher_puzzle_hash=bytes32(SINGLETON_LAUNCHER_HASH),
+            zkpassport_bridge_policy_hash=bridge,
+        )
+        assert got == expected
+
+    def test_is_vault_current_true_when_matching_false_on_drift(self):
+        from populis_puzzles.vault_driver import (
+            VAULT_INNER_MOD,
+            AUTH_TYPE_BLS,
+            one_leaf_merkle_root,
+            puzzle_for_vault_inner,
+        )
+
+        owner = bytes(48)
+        pool_launcher = bytes32(b"\x55" * 32)
+        good_bridge = bytes32(b"\x66" * 32)
+
+        def vault_with(bridge):
+            return puzzle_for_vault_inner(
+                bytes32(b"\xaa" * 32),
+                owner,
+                AUTH_TYPE_BLS,
+                one_leaf_merkle_root(owner),
+                pool_launcher,
+                zkpassport_bridge_policy_hash=bridge,
+            )
+
+        vault_mod_hash = bytes32(VAULT_INNER_MOD.get_tree_hash())
+        cph = canonical_params_hash_from_vault_inner(vault_with(good_bridge))
+        registry = _state(vault_inner_mod_hash=vault_mod_hash, canonical_params_hash=cph)
+
+        # Matching vault -> CURRENT.
+        assert is_vault_current(
+            registry=registry,
+            vault_inner_mod_hash=vault_mod_hash,
+            vault_canonical_params_hash=cph,
+        ) is True
+
+        # Params drift (the bridge-policy-hash bug: zero hash) -> OUTDATED.
+        bad_cph = canonical_params_hash_from_vault_inner(vault_with(bytes32(b"\x00" * 32)))
+        assert is_vault_current(
+            registry=registry,
+            vault_inner_mod_hash=vault_mod_hash,
+            vault_canonical_params_hash=bad_cph,
+        ) is False
+
+        # Code drift (different vault mod hash) -> OUTDATED.
+        assert is_vault_current(
+            registry=registry,
+            vault_inner_mod_hash=bytes32(b"\x01" * 32),
+            vault_canonical_params_hash=cph,
+        ) is False
