@@ -94,9 +94,28 @@ def test_governance_model_decision_is_documented(doc_text: str) -> None:
     # The committee on-chain PGT-VOTE path is not wired (501).
     assert "/admin/committee/vote" in doc_text
     assert "501" in doc_text
-    # The open A/B/C decision is recorded as the top blocking decision.
-    assert "pgt-ratified" in low
-    assert "top blocking decision" in low
+
+
+def test_emergency_vs_routine_determinant_is_code_vs_params(doc_text: str) -> None:
+    """The emergency/routine tier is an objective CLVM-enforced property of the
+    diff (does the vault CODE change), never an admin's discretionary label.
+    """
+    low = _lower(doc_text)
+    assert "tiered by code-vs-parameter change" in low
+    # Code change (VAULT_INNER_MOD_HASH) => always PGT ratification.
+    assert "the vault code changes" in low
+    assert "always requires affirmative pgt quorum ratification" in low
+    # Params-only (CANONICAL_PARAMS_HASH, code byte-identical) => admin fast-track.
+    assert "parameters only" in low
+    assert "byte-identical" in low
+    assert "fast-track" in low
+    # Enforced structurally: the fast path asserts the code hash is unchanged.
+    assert "new vault_inner_mod_hash == vault_inner_mod_hash" in low
+    # Admin can never unilaterally change code; PGT is supreme (veto + cooldown).
+    assert "can never unilaterally change the code" in low
+    assert "pgt-vetoable" in low
+    assert "cooldown" in low
+    assert "pgt is supreme in every path" in low
 
 
 def test_monotonic_version_guard(doc_text: str) -> None:

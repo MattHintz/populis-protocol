@@ -110,8 +110,8 @@ registry identifies the authority's current coin from its launcher id) is a
 Brick 2 detail pinned with consensus tests. The invariant is that
 authorization is the authority's **live quorum** — never a key curried into
 the registry. Whether a **PGT staker ratification vote is *also* required**
-(admin proposes → PGT approves) is an open governance decision — see
-**Governance model** below.
+depends on the tier — see **Governance model** below: vault **code** changes
+always need PGT ratification; **parameter-only** repair is an admin fast-track.
 
 Discovery: the registry singleton's launcher id is published in
 `deployment_manifest.json` and the portal `environment.ts` as a public,
@@ -120,8 +120,10 @@ latest state — identical to how `protocol_config` is read today.
 
 ## Governance model: who authorizes a version publish
 
-This is the most important open decision, recorded here so it is never
-silently assumed.
+RESOLVED (tiered, option C + i): the tier is determined by an objective,
+CLVM-enforced property of the diff — whether the vault's executable code
+changes — never by an admin's discretionary label. Recorded here so it is
+enforced, not assumed.
 
 ### Current protocol reality (2026-06)
 
@@ -144,29 +146,43 @@ silently assumed.
   documented for **mints** (`ADMIN_DESK_DESIGN.md` §5) but not finished
   end-to-end.
 
-### The decision for vault upgrades
+### Resolved model: tiered by code-vs-parameter change
 
-A canonical vault-version publish is a protocol-significant change. Options:
+The tier is an **objective, CLVM-enforced property of the diff**, never an
+admin's discretionary "emergency" label. The registry state is
+`(VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, VAULT_VERSION)`, so the
+determinant is simply *which of those changes*:
 
-- **(A) PGT-ratified (recommended, most decentralized).** The admin/committee
-  PROPOSES a new vault version; PGT stakers RATIFY via a quorum vote; only then
-  does the registry publish. The registry's update spend asserts the proposal
-  tracker's EXECUTE message for a NEW `vault-version` bill type. Requires (1) a
-  new bill in `governance_singleton_inner.clsp` `dispatch_bill` (a **consensus
-  change** — the tracker was deliberately 3-bill-scoped), and (2) the
-  committee-vote path to be wired. This matches "admin proposes, staked PGT
-  approves downstream."
-- **(B) Admin/committee-quorum-only (Brick 1 as currently written).** The
-  `admin_authority_v2` MofN alone authorizes the publish. Simpler; fits
-  emergency/security patches; but **NOT** PGT-ratified.
-- **(C) Tiered.** Routine version upgrades → PGT-ratified (A); narrowly-scoped
-  emergency security patches → admin MofN fast-track (B) behind a published PGT
-  veto/cooldown window.
+- **Routine — the vault CODE changes (`VAULT_INNER_MOD_HASH` differs).** New
+  vault logic, spend cases, or features. **Always requires affirmative PGT
+  quorum ratification** (the governance tracker's EXECUTE for a `vault-version`
+  bill). For a security fix a **shortened emergency-vote window** (faster
+  deadline / emergency threshold) may be used, but PGT still ratifies. **The
+  admin can NEVER unilaterally change the code a user's vault executes.**
+- **Emergency — PARAMETERS only (`CANONICAL_PARAMS_HASH` differs, code
+  byte-identical).** Repairing a misconfigured/compromised curried constant
+  (e.g. the bridge-policy-hash bug, a rotated pool reference). The
+  `admin_authority_v2` MofN may **fast-track** it, because the code is provably
+  unchanged. It stays **PGT-vetoable within a mandatory cooldown**: the new
+  version is not enforced-canonical until the cooldown elapses, during which a
+  PGT veto-quorum can revoke it.
 
-Until this is chosen, the authorization described above (the
-`admin_authority_v2` quorum) is **only the proposal/curation authority**, not a
-final PGT-less approval. The chosen model MUST be pinned before Brick 2/3 build
-the registry and any new bill type.
+Enforcement (so "emergency" is structural, not a claim):
+
+- The registry's fast-track (params-only) spend case **asserts
+  `new VAULT_INNER_MOD_HASH == VAULT_INNER_MOD_HASH`** — a code change through
+  the fast path is rejected by consensus.
+- The fast-track path is **strictly weaker** than the routine path (delayed +
+  PGT-vetoable), so there is no incentive to misuse it. Only the routine PGT
+  vote yields an immediately-final, non-vetoable version. **PGT is supreme in
+  every path.**
+
+This depends on the same PGT wiring the mint flow needs: a `vault-version` bill
+type in `governance_singleton_inner.clsp` for the routine path (a consensus
+change — the tracker was deliberately 3-bill-scoped), plus a veto mechanism and
+the committee-vote path. Until that lands, only the params-only admin
+fast-track is operable (today the admin quorum is your 1-of-1), and code
+changes are blocked from shipping at all — fail-safe.
 
 ## Vault version identity & outdated detection (client-side, no backend)
 
@@ -220,6 +236,10 @@ that all subsequent upgrades are seamless.
   single admin slot (you) in `mofn1of1` mode today, an MofN committee as the
   roster grows. The registry holds **no key of its own** and is never singly
   centralized by construction.
+- **The admin can never unilaterally change vault code.** Any change to
+  `VAULT_INNER_MOD_HASH` requires PGT ratification; the admin fast-track is
+  limited to parameter repair (code byte-identical) and is PGT-vetoable within
+  a cooldown.
 - An upgrade is offered **only** when the on-chain registry advertises a higher
   `VAULT_VERSION` (or a differing canonical identity) than the user's vault. No
   client-side or env-injected version can trigger an upgrade.
@@ -228,11 +248,15 @@ that all subsequent upgrades are seamless.
 ## Phased brick plan
 
 - **Brick 1 (this doc):** design contract + docs-contract test.
-- **Brick 1.5 (governance decision):** pin the governance model (A / B / C
-  above) for version publishes. If A or C, spec the new `vault-version` bill
-  type in `governance_singleton_inner.clsp` and finish the committee PGT-VOTE
-  wiring (`/admin/committee/vote`, portal `/committee`) **before** Brick 2/3
-  grant publish authority.
+- **Brick 1.5 (governance — RESOLVED, tiered by code-vs-params):** the registry
+  has two publish paths. (a) **Params-only fast-track**: `admin_authority_v2`
+  MofN, with the spend case asserting `new VAULT_INNER_MOD_HASH ==
+  VAULT_INNER_MOD_HASH`; PGT-vetoable within a cooldown. (b) **Code-change
+  routine**: requires the PGT proposal tracker's EXECUTE for a NEW
+  `vault-version` bill in `governance_singleton_inner.clsp` (consensus change),
+  plus the committee PGT-VOTE wiring (`/admin/committee/vote`, portal
+  `/committee`) and a veto path. Build (a) first (operable today via the admin
+  1-of-1); (b) gates code upgrades and lands with the PGT wiring.
 - **Brick 2 (protocol):** `vault_version_registry_inner.clsp` + driver + tests,
   mirroring `protocol_config_inner` (authority-quorum-authorized via
   `admin_authority_v2`, monotonic version, content-hash, announcement).
@@ -248,9 +272,9 @@ that all subsequent upgrades are seamless.
 
 ## Open decisions
 
-- **Governance model (A/B/C) for version publishes** — does a vault-version
-  publish require PGT staker ratification, or admin/committee quorum alone? See
-  **Governance model** above. This is the top blocking decision.
+- RESOLVED: governance model is **tiered by code-vs-parameter change** (see
+  **Governance model**). Vault code changes always require PGT ratification;
+  parameter-only repair is an admin fast-track that is PGT-vetoable.
 - RESOLVED: the registry binds to the `admin_authority_v2` quorum by launcher
   id (no standalone key). It resolves to your 1-of-1 today and to the committee
   MofN as the roster grows, with no redeploy.
