@@ -49,9 +49,29 @@ def test_on_chain_version_registry_is_the_source(doc_text: str) -> None:
     assert "vault_version_registry_inner.clsp" in doc_text
     assert "VAULT_INNER_MOD_HASH" in doc_text
     assert "CANONICAL_PARAMS_HASH" in doc_text
-    assert "GOV_PUBKEY" in doc_text
+    assert "ADMIN_AUTHORITY_LAUNCHER_ID" in doc_text
     # Mirrors the proven protocol-config state machine.
     assert "protocol_config_inner" in doc_text
+
+
+def test_publish_authority_binds_to_quorum_not_a_key(doc_text: str) -> None:
+    """Publishes bind to the admin_authority_v2 live quorum, never a fixed key.
+
+    1-of-1 (the admin) today via mofn1of1, MofN committee as the roster grows,
+    with no registry/vault redeploy. Nothing is singly centralized.
+    """
+    assert "ADMIN_AUTHORITY_LAUNCHER_ID" in doc_text
+    # The live testnet11 admin_authority_v2 launcher the registry binds to.
+    assert (
+        "0xf3fd2dedfc77a5b8f65acdfaff04d3786844a8c4d0529d3dbc4d37dc4012bb84"
+        in doc_text
+    )
+    low = _lower(doc_text)
+    assert "no key of its own" in low
+    assert "never singly centralized" in low
+    assert "mofn1of1" in low
+    assert "supermajority" in low
+    assert "admin_roster_update" in low
 
 
 def test_monotonic_version_guard(doc_text: str) -> None:

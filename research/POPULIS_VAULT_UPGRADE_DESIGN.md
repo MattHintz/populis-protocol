@@ -57,10 +57,18 @@ A dedicated singleton `vault_version_registry_inner.clsp`, mirroring the proven
 Curried immutable policy:
 
 - `SELF_MOD_HASH` — for self-recurry on update.
-- `GOV_PUBKEY` — BLS pubkey authorized to publish a new vault version. For now
-  this is the admin's governance key; the design allows binding it to the
-  `admin_authority_v2` quorum / committee later (same way `protocol_config`
-  governance can be rotated to an authority).
+- `ADMIN_AUTHORITY_LAUNCHER_ID` — launcher id of the live `admin_authority_v2`
+  singleton (testnet11:
+  `0xf3fd2dedfc77a5b8f65acdfaff04d3786844a8c4d0529d3dbc4d37dc4012bb84`).
+  The registry has **no key of its own** and is **never singly centralized by
+  construction**. A version publish is authorized by the authority's *current
+  quorum*, asserted on chain (see the update spend). This is deliberately NOT a
+  fixed `GOV_PUBKEY`. Today the authority roster is a single admin slot in
+  `mofn1of1` mode (you), so a publish needs only your one signature — matching
+  "for now I push as admin." As you vote in more admin slots
+  (`ADMIN_ROSTER_UPDATE`, tag 0x07), the operational quorum automatically
+  becomes a supermajority (`ceil(2n/3)`) and publishes require the committee —
+  with **no change to the registry or to any vault**.
 
 Curried mutable state:
 
@@ -82,17 +90,26 @@ CANONICAL_PARAMS_HASH = sha256tree(list
   ZKPASSPORT_BRIDGE_POLICY_HASH)
 ```
 
-Content hash and update spend (authorized exactly like `protocol_config`):
+Content hash and update spend. A publish is co-spent with the
+`admin_authority_v2` singleton: the authority's quorum-authorized `OPERATIONAL`
+spend (0x01) emits an approval announcement committing to the new registry
+state, and the registry asserts it.
 
 ```text
 content_hash(state) = sha256tree(list VAULT_INNER_MOD_HASH CANONICAL_PARAMS_HASH VAULT_VERSION)
 
-On a valid publish-version spend:
-  AGG_SIG_ME GOV_PUBKEY content_hash(new_state)
+On a valid publish-version spend (co-spent with the admin_authority_v2 coin):
+  ASSERT_<authority>_ANNOUNCEMENT (approve || content_hash(new_state))
   CREATE_COIN new_inner_puzhash my_amount
   CREATE_PUZZLE_ANNOUNCEMENT (PROTOCOL_PREFIX || content_hash(new_state))
   assert (> new_VAULT_VERSION VAULT_VERSION)
 ```
+
+The exact announcement binding (coin vs puzzle announcement, and how the
+registry identifies the authority's current coin from its launcher id) is a
+Brick 2 detail pinned with consensus tests. The invariant is that
+authorization is the authority's **live quorum** — never a key curried into
+the registry.
 
 Discovery: the registry singleton's launcher id is published in
 `deployment_manifest.json` and the portal `environment.ts` as a public,
@@ -147,8 +164,10 @@ that all subsequent upgrades are seamless.
 - **No Populis backend** participates in version detection or upgrade. The
   portal reads coinset.org directly and the wallet signs locally.
 - The single trust root is the on-chain `vault_version_registry` singleton,
-  authorized by `GOV_PUBKEY` (admin now → `admin_authority_v2` / committee
-  later).
+  whose publishes are authorized by the live `admin_authority_v2` quorum — a
+  single admin slot (you) in `mofn1of1` mode today, an MofN committee as the
+  roster grows. The registry holds **no key of its own** and is never singly
+  centralized by construction.
 - An upgrade is offered **only** when the on-chain registry advertises a higher
   `VAULT_VERSION` (or a differing canonical identity) than the user's vault. No
   client-side or env-injected version can trigger an upgrade.
@@ -158,8 +177,8 @@ that all subsequent upgrades are seamless.
 
 - **Brick 1 (this doc):** design contract + docs-contract test.
 - **Brick 2 (protocol):** `vault_version_registry_inner.clsp` + driver + tests,
-  mirroring `protocol_config_inner` (gov-authorized, monotonic version,
-  content-hash, announcement).
+  mirroring `protocol_config_inner` (authority-quorum-authorized via
+  `admin_authority_v2`, monotonic version, content-hash, announcement).
 - **Brick 3 (protocol, consensus-critical):** add a curried `VAULT_VERSION` and
   a `migrate` spend case to `vault_singleton_inner.clsp` (audited) that
   atomically sends the deed/position to a new vault launcher; recompile.
@@ -172,7 +191,8 @@ that all subsequent upgrades are seamless.
 
 ## Open decisions
 
-- Bind the registry `GOV_PUBKEY` to the `admin_authority_v2` quorum vs a
-  standalone gov key (recommend: standalone now, committee-bound later).
+- RESOLVED: the registry binds to the `admin_authority_v2` quorum by launcher
+  id (no standalone key). It resolves to your 1-of-1 today and to the committee
+  MofN as the roster grows, with no redeploy.
 - Whether to add a `melt`/reclaim case to empty old vaults.
 - Faucet vs user funding for the new launcher coin during alpha.
