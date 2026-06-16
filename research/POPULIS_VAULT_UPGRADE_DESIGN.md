@@ -260,9 +260,20 @@ that all subsequent upgrades are seamless.
 - **Brick 2 (protocol):** `vault_version_registry_inner.clsp` + driver + tests,
   mirroring `protocol_config_inner` (authority-quorum-authorized via
   `admin_authority_v2`, monotonic version, content-hash, announcement).
-- **Brick 3 (protocol, consensus-critical):** add a curried `VAULT_VERSION` and
-  a `migrate` spend case to `vault_singleton_inner.clsp` (audited) that
-  atomically sends the deed/position to a new vault launcher; recompile.
+- **Brick 3 (protocol, consensus-critical) — DONE:** added the `migrate` (`'m'`)
+  spend case to `vault_singleton_inner.clsp` **in place** (the vault mod hash
+  changes, so new vaults gain it and pre-`migrate` vaults cannot — the
+  chicken-and-egg above). It is **BLS-only** and the owner signs over the
+  destination `(SPEND_MIGRATE, deed_launcher_id, new_p2_vault_puzzlehash, my_id)`
+  so a relayer cannot redirect the deed; it emits the
+  `CREATE_PUZZLE_ANNOUNCEMENT` the deed's `p2_vault` asserts, re-binding the deed
+  (identity/launcher preserved) to the new vault's `p2_vault`. The optional
+  `VAULT_VERSION` curry is **deferred** (detection works by mod-hash +
+  params-hash; the explicit number is display-only, see above). Driver:
+  `build_vault_migrate_spend` / `migrate_bls_signing_tree`; tests in
+  `tests/test_vault.py::TestVaultBLSMigrate` (incl. the end-to-end p2_vault
+  announcement match). secp256k1/secp256r1 migrate is deferred (needs a new
+  EIP-712 typehash covering the destination), consistent with `'a'`/`'k'`.
 - **Brick 4 (api/protocol):** registry launch + admin publish-version helper;
   faucet mints new vaults at the canonical params/version.
 - **Brick 5 (portal):** read the registry from chain (no backend), compute

@@ -515,6 +515,7 @@ SPEND_RECEIVE_FROM_POOL: int = 0x69  # b'i'
 SPEND_ACCEPT_OFFER: int = 0x61      # b'a' (BLS-only; secp deferred — see CRIT-2 residual)
 SPEND_UPDATE_KEYS: int = 0x6B       # b'k' (BLS-only; secp deferred)
 SPEND_UPDATE_IDENTITY: int = 0x7A
+SPEND_MIGRATE: int = 0x6D           # b'm' (BLS-only; secp deferred — see CRIT-2 residual)
 
 
 def _inner_solution_for_deposit(
@@ -620,6 +621,33 @@ def _inner_solution_for_update_identity(
             bytes(new_identity_attest_root),
             bytes(bridge_parent_id),
             int(bridge_amount),
+            int(current_timestamp),
+            signature_data if signature_data is not None else b"",
+        ],
+    ])
+
+
+def _inner_solution_for_migrate(
+    my_id: bytes32,
+    my_inner_puzhash: bytes32,
+    my_amount: int,
+    deed_launcher_id: bytes32,
+    new_p2_vault_puzzlehash: bytes32,
+    current_timestamp: int,
+    signature_data: Optional[bytes],
+) -> Program:
+    """Construct the INNER puzzle solution for a 'm' (migrate-deed) spend.
+
+    p = (deed_launcher_id new_p2_vault_puzzlehash current_timestamp signature_data)
+    """
+    return Program.to([
+        bytes(my_id),
+        bytes(my_inner_puzhash),
+        int(my_amount),
+        SPEND_MIGRATE,
+        [
+            bytes(deed_launcher_id),
+            bytes(new_p2_vault_puzzlehash),
             int(current_timestamp),
             signature_data if signature_data is not None else b"",
         ],
@@ -831,6 +859,88 @@ def build_vault_update_identity_spend(
         new_identity_attest_root=new_identity_attest_root,
         bridge_parent_id=bridge_parent_id,
         bridge_amount=bridge_amount,
+        current_timestamp=current_timestamp,
+        signature_data=signature_data,
+    )
+    full_solution = solution_for_singleton(
+        lineage_proof, uint64(vault_coin.amount), inner_solution,
+    )
+    return make_spend(vault_coin, full_puzzle, full_solution)
+
+
+def migrate_bls_signing_tree(
+    deed_launcher_id: bytes32,
+    new_p2_vault_puzzlehash: bytes32,
+    vault_coin_id: bytes32,
+) -> bytes32:
+    """Return the inner of the AGG_SIG_ME message a BLS owner signs for a 'm' spend.
+
+    Matches `(sha256tree (list SPEND_MIGRATE deed_launcher_id new_p2_vault_puzzlehash my_id))`
+    inside `vault_singleton_inner.clsp`.  The network appends the coin id and
+    genesis challenge to form the full AGG_SIG_ME message; this is the puzzle's
+    contribution to it.
+    """
+    return Program.to([
+        SPEND_MIGRATE,
+        bytes(deed_launcher_id),
+        bytes(new_p2_vault_puzzlehash),
+        bytes(vault_coin_id),
+    ]).get_tree_hash()
+
+
+def build_vault_migrate_spend(
+    vault_coin: Coin,
+    vault_launcher_id: bytes32,
+    owner_pubkey_bytes: bytes,
+    auth_type: int,
+    members_merkle_root: bytes32,
+    pool_launcher_id: bytes32,
+    deed_launcher_id: bytes32,
+    new_vault_launcher_id: bytes32,
+    current_timestamp: int,
+    lineage_proof: LineageProof,
+    signature_data: Optional[bytes] = None,
+    *,
+    identity_attest_root: bytes32 = DEFAULT_IDENTITY_ATTEST_ROOT,
+    zkpassport_bridge_policy_hash: bytes32 = DEFAULT_ZKPASSPORT_BRIDGE_POLICY_HASH,
+) -> CoinSpend:
+    """Build a CoinSpend for a vault 'm' (migrate a deed to a new vault) operation.
+
+    The deed NFT is an NFT singleton whose inner puzzle is `p2_vault` curried to
+    THIS vault's launcher id.  Migration re-binds it to `new_vault_launcher_id`
+    by spending the deed to `puzzle_for_p2_vault(new_vault_launcher_id)` — the
+    deed keeps its launcher id (identity preserved); only its controller changes.
+
+    Co-spend requirements (the caller must also spend the deed coin in the same
+    SpendBundle):
+      - The deed (p2_vault inner) is spent with
+          `singleton_inner_puzzle_hash = <this vault's inner puzzle hash>`,
+          `singleton_coin_id          = vault_coin.name()`,
+          `my_launcher_id             = deed_launcher_id`,
+          `next_puzzlehash            = puzzle_for_p2_vault(new_vault_launcher_id).get_tree_hash()`.
+      - The deed's p2_vault asserts this vault's CREATE_PUZZLE_ANNOUNCEMENT whose
+        content is `PROTOCOL_PREFIX || sha256tree([my_id, deed_launcher_id, next_puzzlehash])`.
+
+    AUTH is BLS-only (`auth_type` must be `AUTH_TYPE_BLS`); the AGG_SIG_ME inner
+    message is `migrate_bls_signing_tree(deed_launcher_id, new_p2_vault_puzzlehash,
+    vault_coin.name())`, produced by the CLVM and signed by the wallet.  secp
+    migrate is deferred (the puzzle raises for secp AUTH_TYPEs).
+    """
+    new_p2_vault_puzzlehash = puzzle_for_p2_vault(new_vault_launcher_id).get_tree_hash()
+    inner_puzzle = puzzle_for_vault_inner(
+        vault_launcher_id, owner_pubkey_bytes, auth_type,
+        members_merkle_root, pool_launcher_id,
+        identity_attest_root=identity_attest_root,
+        zkpassport_bridge_policy_hash=zkpassport_bridge_policy_hash,
+    )
+    full_puzzle = puzzle_for_singleton(vault_launcher_id, inner_puzzle)
+    my_id = vault_coin.name()
+    inner_solution = _inner_solution_for_migrate(
+        my_id=my_id,
+        my_inner_puzhash=inner_puzzle.get_tree_hash(),
+        my_amount=int(vault_coin.amount),
+        deed_launcher_id=deed_launcher_id,
+        new_p2_vault_puzzlehash=new_p2_vault_puzzlehash,
         current_timestamp=current_timestamp,
         signature_data=signature_data,
     )

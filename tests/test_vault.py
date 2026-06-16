@@ -71,6 +71,7 @@ SPEND_DEPOSIT_TO_POOL = 0x6f    # b'o'
 SPEND_RECEIVE_FROM_POOL = 0x69  # b'i'
 SPEND_ACCEPT_OFFER = 0x61       # b'a'
 SPEND_UPDATE_IDENTITY = 0x7a
+SPEND_MIGRATE = 0x6d            # b'm'
 
 # Protocol prefix (must match PROTOCOL_PREFIX in utility_macros.clib = 0x50)
 PROTOCOL_PREFIX = b"\x50"
@@ -371,7 +372,10 @@ class TestVaultBLSAcceptOffer:
             CURRENT_TIMESTAMP,
             None,
         )
-        assert sol.get_tree_hash().hex() == "5dba93984fe20060ed0e419f5a9cd582afa02f932b7648b7cc7fc484f3a0bb89"
+        # Pinned solution tree hash. Embeds the vault inner puzzle hash, so it
+        # updates whenever vault_singleton_inner.clsp's mod hash changes — here,
+        # the 'm' (migrate) spend case (vault upgrade flow) was added.
+        assert sol.get_tree_hash().hex() == "435c607c67a8892d3690b4abaad15cf9e5f375251d567ece2e35f89fdf0167c9"
         fields = list(sol.as_iter())
         params = list(fields[4].as_iter())
         assert bytes32(fields[0].as_atom()) == my_id
@@ -1105,6 +1109,140 @@ class TestP2Vault:
         ])
         conds = curried.run(sol).as_python()
         assert extract_cond(conds, OP_ASSERT_PUZZLE_ANN) is not None
+
+
+class TestVaultBLSMigrate:
+    """BLS path — SPEND CASE 'm': migrate a deed to a new vault.
+
+    A deed is an NFT singleton whose inner puzzle is p2_vault curried to THIS
+    vault's launcher.  Migration re-binds it to a destination vault by spending
+    it to the destination's p2_vault puzzle hash, gated by the vault's signed
+    CREATE_PUZZLE_ANNOUNCEMENT.
+    """
+
+    def _sol(self, my_id, vault_inner_ph, dest, sig=None):
+        return Program.to([
+            my_id, vault_inner_ph, 1, SPEND_MIGRATE,
+            [DEED_LAUNCHER_ID, dest, CURRENT_TIMESTAMP, sig],
+        ])
+
+    def test_migrate_emits_expected_conditions(self):
+        curried = curry_vault_bls()
+        my_id = bytes32(b"\x11" * 32)
+        conds = curried.run(self._sol(my_id, curried.get_tree_hash(), bytes32(b"\x77" * 32))).as_python()
+        # AGG_SIG_ME, CREATE_PUZZLE_ANN, CREATE_COIN, REMARK,
+        # ASSERT_SECONDS_ABSOLUTE, ASSERT_BEFORE_SECONDS_ABSOLUTE,
+        # ASSERT_MY_COIN_ID, ASSERT_MY_AMOUNT, ASSERT_MY_PUZZLEHASH
+        assert len(conds) == 9
+        assert extract_cond(conds, OP_AGG_SIG_ME)[1] == BLS_OWNER_PUBKEY
+
+    def test_migrate_agg_sig_binds_destination(self):
+        """The owner signs over the destination, so a relayer cannot redirect the deed."""
+        curried = curry_vault_bls()
+        my_id = bytes32(b"\x11" * 32)
+        dest = bytes32(b"\x77" * 32)
+        conds = curried.run(self._sol(my_id, curried.get_tree_hash(), dest)).as_python()
+        agg = extract_cond(conds, OP_AGG_SIG_ME)
+        assert agg[2] == Program.to([SPEND_MIGRATE, DEED_LAUNCHER_ID, dest, my_id]).get_tree_hash()
+        other = Program.to([SPEND_MIGRATE, DEED_LAUNCHER_ID, bytes32(b"\x66" * 32), my_id]).get_tree_hash()
+        assert agg[2] != other
+
+    def test_migrate_recreates_vault_unchanged(self):
+        curried = curry_vault_bls()
+        my_id = bytes32(b"\x11" * 32)
+        vault_inner_ph = curried.get_tree_hash()
+        conds = curried.run(self._sol(my_id, vault_inner_ph, bytes32(b"\x77" * 32))).as_python()
+        create = extract_cond(conds, OP_CREATE_COIN)
+        assert create[1] == vault_inner_ph
+        assert int.from_bytes(create[2], "big") == 1
+
+    def test_migrate_announcement_matches_p2_vault_assertion(self):
+        """The vault's CREATE_PUZZLE_ANNOUNCEMENT id equals what the deed's p2_vault
+        asserts when co-spent to the destination — the atomic link that moves the deed."""
+        from chia.wallet.puzzles.singleton_top_layer_v1_1 import puzzle_for_singleton
+
+        curried = curry_vault_bls()
+        vault_inner_ph = curried.get_tree_hash()
+        my_id = bytes32(b"\x11" * 32)
+        dest = bytes32(b"\x77" * 32)
+
+        conds = curried.run(self._sol(my_id, vault_inner_ph, dest)).as_python()
+        ann = extract_cond(conds, OP_CREATE_PUZZLE_ANN)
+        expected_msg = PROTOCOL_PREFIX + bytes(Program.to([my_id, DEED_LAUNCHER_ID, dest]).get_tree_hash())
+        assert ann[1] == expected_msg
+
+        vault_full_ph = puzzle_for_singleton(VAULT_LAUNCHER_ID, curried).get_tree_hash()
+        expected_id = hashlib.sha256(bytes(vault_full_ph) + bytes(expected_msg)).digest()
+
+        p2 = curry_p2_vault()
+        p2_sol = Program.to([
+            vault_inner_ph,          # singleton_inner_puzzle_hash (real vault inner ph)
+            my_id,                   # singleton_coin_id (the vault coin announcing)
+            DEED_LAUNCHER_ID,        # my_launcher_id (the deed)
+            bytes32(b"\xff" * 32),   # my_singleton_inner_puzzle_hash (deed inner; arbitrary)
+            1,                       # my_amount
+            dest,                    # next_puzzlehash (destination vault's p2_vault)
+        ])
+        p2_conds = p2.run(p2_sol).as_python()
+        assert extract_cond(p2_conds, OP_ASSERT_PUZZLE_ANN)[1] == expected_id
+        assert extract_cond(p2_conds, OP_CREATE_COIN)[1] == dest
+
+    def test_migrate_rejects_zero_destination(self):
+        curried = curry_vault_bls()
+        my_id = bytes32(b"\x11" * 32)
+        with pytest.raises(Exception):
+            curried.run(self._sol(my_id, curried.get_tree_hash(), bytes32(b"\x00" * 32)))
+
+    def test_migrate_rejects_secp_auth(self):
+        """secp migrate is deferred — the puzzle must raise, not silently mis-sign."""
+        curried = curry_vault_secp()
+        my_id = bytes32(b"\x11" * 32)
+        with pytest.raises(Exception):
+            curried.run(self._sol(my_id, curried.get_tree_hash(), bytes32(b"\x77" * 32), sig=b"\x00" * 64))
+
+    def test_migrate_driver_solution_and_signing_tree(self):
+        from populis_puzzles.vault_driver import (
+            _inner_solution_for_migrate, puzzle_for_p2_vault,
+            migrate_bls_signing_tree, SPEND_MIGRATE as DRV_SPEND_MIGRATE,
+        )
+        my_id = bytes32(b"\x11" * 32)
+        new_launcher = bytes32(b"\x55" * 32)
+        dest = puzzle_for_p2_vault(new_launcher).get_tree_hash()
+        sol = _inner_solution_for_migrate(my_id, my_id, 1, DEED_LAUNCHER_ID, dest, CURRENT_TIMESTAMP, None)
+        parts = list(sol.as_iter())
+        assert parts[3].as_int() == DRV_SPEND_MIGRATE == SPEND_MIGRATE
+        p = list(parts[4].as_iter())
+        assert p[0].as_atom() == DEED_LAUNCHER_ID
+        assert p[1].as_atom() == bytes(dest)
+        assert migrate_bls_signing_tree(DEED_LAUNCHER_ID, dest, my_id) == \
+            Program.to([SPEND_MIGRATE, DEED_LAUNCHER_ID, dest, my_id]).get_tree_hash()
+
+    def test_build_vault_migrate_spend_carries_destination(self):
+        from chia.types.blockchain_format.coin import Coin
+        from chia.wallet.lineage_proof import LineageProof
+        from populis_puzzles.vault_driver import (
+            build_vault_migrate_spend, puzzle_for_vault_inner, puzzle_for_p2_vault,
+        )
+
+        current_inner = puzzle_for_vault_inner(
+            VAULT_LAUNCHER_ID, BLS_OWNER_PUBKEY, AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT, POOL_LAUNCHER_ID,
+        )
+        vault_coin = Coin(bytes32(b"\x99" * 32), current_inner.get_tree_hash(), 1)
+        lineage = LineageProof(parent_name=VAULT_LAUNCHER_ID, amount=1)
+        new_launcher = bytes32(b"\x55" * 32)
+        spend = build_vault_migrate_spend(
+            vault_coin, VAULT_LAUNCHER_ID, BLS_OWNER_PUBKEY, AUTH_TYPE_BLS,
+            MEMBERS_MERKLE_ROOT, POOL_LAUNCHER_ID, DEED_LAUNCHER_ID,
+            new_launcher, CURRENT_TIMESTAMP, lineage,
+        )
+        assert spend.coin == vault_coin
+        full_sol = Program.from_bytes(bytes(spend.solution))
+        inner_sol = list(full_sol.as_iter())[2]
+        parts = list(inner_sol.as_iter())
+        assert parts[3].as_int() == SPEND_MIGRATE
+        p = list(parts[4].as_iter())
+        assert p[1].as_atom() == bytes(puzzle_for_p2_vault(new_launcher).get_tree_hash())
 
 
 class TestP2Pool:

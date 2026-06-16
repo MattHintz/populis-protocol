@@ -9,6 +9,10 @@
 ;; 'a' - accept pool offer: secondary purchase via atomic swap
 ;; 'k' - update keys: rotate OWNER_PUBKEY and/or MEMBERS_MERKLE_ROOT without
 ;;        redeploying the launcher; requires current key membership proof
+;; 'm' - migrate a deed to a new vault: re-bind a deed NFT (held at p2_vault)
+;;        from this vault's launcher to a destination vault's p2_vault.  The
+;;        on-chain half of the vault upgrade flow (research/POPULIS_VAULT_UPGRADE_DESIGN.md);
+;;        BLS-only, owner-signed over the destination.
 ;;
 ;; Auth types (curried as AUTH_TYPE):
 ;; 1 - BLS signature (AGG_SIG_ME) — Chia native wallets (Goby, Sage)
@@ -50,6 +54,7 @@
   (defconst SPEND_ACCEPT_OFFER 'a')
   (defconst SPEND_UPDATE_KEYS 'k')
   (defconst SPEND_UPDATE_IDENTITY 'z')
+  (defconst SPEND_MIGRATE 'm')
 
   ;; Authentication type constants
   (defconst AUTH_TYPE_BLS 1)
@@ -544,6 +549,69 @@
     )
   )
 
+  ;; SPEND CASE 'm' — MIGRATE A DEED TO A NEW VAULT
+  ;; p = (deed_launcher_id new_p2_vault_puzzlehash current_timestamp signature_data)
+  ;;
+  ;; Purpose: authorize a deed NFT — held at p2_vault, whose inner puzzle is
+  ;; p2_vault curried to THIS vault's launcher id — to re-bind to a NEW vault by
+  ;; spending the deed to `new_p2_vault_puzzlehash`, the p2_vault puzzle hash
+  ;; curried to the destination vault's launcher id.  This is the on-chain half
+  ;; of the vault upgrade flow (research/POPULIS_VAULT_UPGRADE_DESIGN.md): the
+  ;; user launches a new vault at the canonical version, then migrates each deed
+  ;; from the old vault to the new one with one signed spend per deed.
+  ;;
+  ;; Co-spend protocol with p2_vault (the deed's inner puzzle), mirroring 'i':
+  ;;   vault emits   CREATE_PUZZLE_ANNOUNCEMENT(PREFIX + sha256tree(list my_id deed_launcher_id new_p2_vault_puzzlehash))
+  ;;   p2_vault asserts that announcement (ASSERT_PUZZLE_ANNOUNCEMENT from the vault full puzzle hash)
+  ;;     and CREATE_COINs the deed to new_p2_vault_puzzlehash.
+  ;; The deed keeps its launcher id (identity preserved); only its controller
+  ;; (the vault launcher curried inside p2_vault) changes.
+  ;;
+  ;; AUTH: BLS-only, like 'a' and 'k'.  The signed message binds
+  ;;   (SPEND_MIGRATE, deed_launcher_id, new_p2_vault_puzzlehash, my_id)
+  ;; so the OWNER commits to the destination — a relayer assembling the spend
+  ;; cannot redirect the deed to a vault it controls.  secp256k1 / secp256r1
+  ;; migrate needs a distinct EIP-712 typehash covering new_p2_vault_puzzlehash
+  ;; and is deferred to the CRIT-2 extension (authenticate_spend_bls_only raises
+  ;; for secp AUTH_TYPEs).
+  ;;
+  ;; The vault recreates itself unchanged (CREATE_COIN my_inner_puzzlehash) — it
+  ;; stays alive and may be emptied deed-by-deed, then abandoned/melted later.
+  (defun spend_migrate (SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE
+                        my_id my_inner_puzzlehash my_amount
+                        deed_launcher_id new_p2_vault_puzzlehash current_timestamp signature_data)
+    (assert
+      (is-size-b32 deed_launcher_id)
+      (is-size-b32 new_p2_vault_puzzlehash)
+      ;; Reject the all-zeros destination — a degenerate puzzle hash that would
+      ;; burn the deed into an unspendable coin (same rationale as the
+      ;; pool_inner_puzhash zero-check in 'a').
+      (not (= new_p2_vault_puzzlehash 0x0000000000000000000000000000000000000000000000000000000000000000))
+      (is-uint64 current_timestamp)
+      (c
+        ;; BLS-only auth that binds the destination; secp deferred (raises).
+        (authenticate_spend_bls_only AUTH_TYPE OWNER_PUBKEY
+          (sha256tree (list SPEND_MIGRATE deed_launcher_id new_p2_vault_puzzlehash my_id)))
+        (c
+          ;; The announcement p2_vault asserts to release the deed to the new vault.
+          (list CREATE_PUZZLE_ANNOUNCEMENT
+            (concat PROTOCOL_PREFIX (sha256tree (list my_id deed_launcher_id new_p2_vault_puzzlehash))))
+          (c
+            ;; Recreate this vault unchanged.
+            (list CREATE_COIN my_inner_puzzlehash my_amount (list my_inner_puzzlehash))
+            (c
+              (list REMARK PROTOCOL_PREFIX SPEND_MIGRATE deed_launcher_id new_p2_vault_puzzlehash)
+              (merge-lists
+                (time_bound_conditions current_timestamp)
+                (base_conditions SINGLETON_STRUCT my_id my_amount my_inner_puzzlehash)
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+
   ;; Main dispatch — validate common inputs, then route.
   ;; p layout per spend case:
   ;;   'o'  (deed_launcher_id current_timestamp signature_data)                                  — LOW-13: dropped dead pool_inner_puzhash
@@ -551,6 +619,7 @@
   ;;   'a'  (deed_launcher_id token_amount pool_inner_puzhash current_timestamp signature_data)  — 'a' actually uses pool_inner_puzhash
   ;;   'k'  (vault_inner_mod_hash new_owner_pubkey new_auth_type new_merkle_root member_proof current_timestamp signature_data)
   ;;        — LOW-11 fix added new_auth_type to allow BLS↔secp migration on rotation.
+  ;;   'm'  (deed_launcher_id new_p2_vault_puzzlehash current_timestamp signature_data)  — BLS-only deed migration to a new vault.
   ;; For BLS (AUTH_TYPE 1): signature_data may be nil — AGG_SIG_ME is enforced by the network.
   ;; For secp256k1 (AUTH_TYPE 3): signature_data must be the 64-byte compact EIP-712 signature.
   ;;
@@ -593,7 +662,12 @@
                                      POOL_SINGLETON_MOD_HASH POOL_SINGLETON_LAUNCHER_ID POOL_SINGLETON_LAUNCHER_PUZZLE_HASH
                                      my_id my_inner_puzzlehash my_amount
                                      (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))) (f (r (r (r (r p))))) (f (r (r (r (r (r p)))))))
-              (x) ;; unknown spend case
+              (if (= spend_case SPEND_MIGRATE)
+                (spend_migrate SINGLETON_STRUCT OWNER_PUBKEY AUTH_TYPE
+                               my_id my_inner_puzzlehash my_amount
+                               (f p) (f (r p)) (f (r (r p))) (f (r (r (r p)))))
+                (x) ;; unknown spend case
+              )
             )
           )
         )
