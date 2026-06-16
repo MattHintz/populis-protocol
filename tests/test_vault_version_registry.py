@@ -1,0 +1,371 @@
+"""Unit tests for vault_version_registry_inner.clsp + driver (Brick 2).
+
+The vault-version registry singleton publishes the canonical current vault
+descriptor on-chain so any client can detect outdated vaults (decentralized,
+backend-free).  These tests verify both the CLVM behaviour and the Python
+driver, and critically that:
+
+  * the off-chain ``compute_content_hash`` exactly mirrors the on-chain
+    ``content-hash`` defun (read out of the published announcement), and
+  * the cross-singleton authorization binding (ASSERT_PUZZLE_ANNOUNCEMENT keyed
+    by the authorizer's real singleton puzzle hash) matches chia's actual
+    singleton puzzle-hash construction, and
+  * the tiered governance enforcement holds: the params-only fast-track path
+    rejects any change to the vault CODE hash.
+"""
+from __future__ import annotations
+
+import pytest
+from chia.types.blockchain_format.program import Program
+from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
+    SINGLETON_LAUNCHER_HASH,
+    SINGLETON_MOD,
+    SINGLETON_MOD_HASH,
+)
+from chia_rs.sized_bytes import bytes32
+
+from populis_puzzles.vault_version_registry_driver import (
+    PROTOCOL_PREFIX,
+    SPEND_CODE_ROUTINE,
+    SPEND_PARAMS_FASTTRACK,
+    TAG_FASTTRACK,
+    TAG_ROUTINE,
+    VaultVersionRegistryState,
+    build_fasttrack_spend,
+    build_routine_spend,
+    compute_authorizer_announcement_id,
+    compute_content_hash,
+    make_inner_puzzle,
+    parse_inner_puzzle,
+    vault_version_registry_inner_mod,
+    vault_version_registry_inner_mod_hash,
+)
+
+# ── CLVM condition opcodes ──────────────────────────────────────────────────
+CREATE_COIN = 51
+CREATE_PUZZLE_ANNOUNCEMENT = 62
+ASSERT_PUZZLE_ANNOUNCEMENT = 63
+ASSERT_MY_AMOUNT = 73
+
+# ── Distinct sentinels so a swapped-arg bug surfaces immediately ────────────
+ADMIN_AUTHORITY_LAUNCHER_ID = bytes32(b"\xa1" * 32)
+GOVERNANCE_LAUNCHER_ID = bytes32(b"\xb2" * 32)
+VAULT_INNER_MOD_HASH = bytes32(b"\xc3" * 32)
+CANONICAL_PARAMS_HASH = bytes32(b"\xd4" * 32)
+VAULT_VERSION = 1
+
+NEW_CANONICAL_PARAMS_HASH = bytes32(b"\xe5" * 32)
+NEW_VAULT_INNER_MOD_HASH = bytes32(b"\xf6" * 32)
+NEW_VAULT_VERSION = 2
+
+SINGLETON_AMOUNT = 1
+
+# Stand-in inner puzzles for the authorizing singletons (admin authority /
+# governance).  The registry only consumes their tree hashes; their full
+# singleton puzzle hash is the announcement key.
+AUTHORITY_INNER = Program.to(1)
+GOVERNANCE_INNER = Program.to((1, 2))
+
+
+def _curry(
+    *,
+    vault_inner_mod_hash: bytes32 = VAULT_INNER_MOD_HASH,
+    canonical_params_hash: bytes32 = CANONICAL_PARAMS_HASH,
+    vault_version: int = VAULT_VERSION,
+) -> Program:
+    return make_inner_puzzle(
+        admin_authority_launcher_id=ADMIN_AUTHORITY_LAUNCHER_ID,
+        governance_launcher_id=GOVERNANCE_LAUNCHER_ID,
+        vault_inner_mod_hash=vault_inner_mod_hash,
+        canonical_params_hash=canonical_params_hash,
+        vault_version=vault_version,
+    )
+
+
+def _state(**kwargs) -> VaultVersionRegistryState:
+    return parse_inner_puzzle(_curry(**kwargs))
+
+
+def _singleton_full_ph(launcher_id: bytes32, inner_puzzle: Program) -> bytes32:
+    """Ground-truth singleton full puzzle hash via chia's real top layer."""
+    struct = Program.to((SINGLETON_MOD_HASH, (launcher_id, SINGLETON_LAUNCHER_HASH)))
+    return bytes32(SINGLETON_MOD.curry(struct, inner_puzzle).get_tree_hash())
+
+
+def _run(curried: Program, solution: Program) -> list:
+    return curried.run(solution).as_python()
+
+
+def _of(conds: list, opcode: int) -> list:
+    return [c for c in conds if int.from_bytes(c[0], "big") == opcode]
+
+
+# ── Compile + module-hash sanity ────────────────────────────────────────────
+
+
+class TestCompile:
+    def test_module_compiles(self):
+        mod = vault_version_registry_inner_mod()
+        assert mod is not None
+        assert mod.get_tree_hash() is not None
+
+    def test_module_hash_is_stable(self):
+        h1 = vault_version_registry_inner_mod_hash()
+        h2 = vault_version_registry_inner_mod_hash()
+        assert h1 == h2
+        assert len(h1) == 32
+
+
+# ── content_hash determinism + field sensitivity ────────────────────────────
+
+
+class TestContentHash:
+    def test_determinism(self):
+        h1 = compute_content_hash(VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, 1)
+        h2 = compute_content_hash(VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, 1)
+        assert h1 == h2
+        assert len(h1) == 32
+
+    def test_code_change_changes_hash(self):
+        h1 = compute_content_hash(VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, 1)
+        h2 = compute_content_hash(NEW_VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, 1)
+        assert h1 != h2
+
+    def test_params_change_changes_hash(self):
+        h1 = compute_content_hash(VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, 1)
+        h2 = compute_content_hash(VAULT_INNER_MOD_HASH, NEW_CANONICAL_PARAMS_HASH, 1)
+        assert h1 != h2
+
+    def test_version_change_changes_hash(self):
+        h1 = compute_content_hash(VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, 1)
+        h2 = compute_content_hash(VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, 2)
+        assert h1 != h2
+
+
+# ── State parse round-trip ──────────────────────────────────────────────────
+
+
+class TestParse:
+    def test_round_trip(self):
+        state = _state()
+        assert state.self_mod_hash == vault_version_registry_inner_mod_hash()
+        assert state.singleton_mod_hash == bytes32(SINGLETON_MOD_HASH)
+        assert state.launcher_puzzle_hash == bytes32(SINGLETON_LAUNCHER_HASH)
+        assert state.admin_authority_launcher_id == ADMIN_AUTHORITY_LAUNCHER_ID
+        assert state.governance_launcher_id == GOVERNANCE_LAUNCHER_ID
+        assert state.vault_inner_mod_hash == VAULT_INNER_MOD_HASH
+        assert state.canonical_params_hash == CANONICAL_PARAMS_HASH
+        assert state.vault_version == VAULT_VERSION
+
+    def test_content_hash_property_matches_helper(self):
+        state = _state()
+        assert state.content_hash == compute_content_hash(
+            VAULT_INNER_MOD_HASH, CANONICAL_PARAMS_HASH, VAULT_VERSION
+        )
+
+    def test_rejects_non_registry_puzzle(self):
+        bogus = Program.to((1, [[1, b"nope"]])).curry(b"\x00" * 32)
+        with pytest.raises(ValueError, match="does not instantiate"):
+            parse_inner_puzzle(bogus)
+
+
+# ── Params-only fast-track path ─────────────────────────────────────────────
+
+
+class TestFastTrack:
+    def _run_fasttrack(self):
+        state = _state()
+        art = build_fasttrack_spend(
+            current=state,
+            authorizer_inner_puzzle_hash=bytes32(AUTHORITY_INNER.get_tree_hash()),
+            new_canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            new_vault_version=NEW_VAULT_VERSION,
+        )
+        conds = _run(_curry(), art.inner_solution)
+        return conds, art
+
+    def test_emits_exactly_four_conditions(self):
+        conds, _ = self._run_fasttrack()
+        assert len(conds) == 4
+
+    def test_authorization_binds_to_admin_authority(self):
+        conds, _ = self._run_fasttrack()
+        # Code is preserved on the fast path, so the approval commits to the
+        # ORIGINAL VAULT_INNER_MOD_HASH with the new params/version.
+        authority_full_ph = _singleton_full_ph(
+            ADMIN_AUTHORITY_LAUNCHER_ID, AUTHORITY_INNER
+        )
+        expected = compute_authorizer_announcement_id(
+            authorizer_full_puzzle_hash=authority_full_ph,
+            path_tag=TAG_FASTTRACK,
+            vault_inner_mod_hash=VAULT_INNER_MOD_HASH,
+            canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            vault_version=NEW_VAULT_VERSION,
+        )
+        asserts = _of(conds, ASSERT_PUZZLE_ANNOUNCEMENT)
+        assert len(asserts) == 1
+        assert asserts[0][1] == bytes(expected)
+
+    def test_create_coin_recreates_self_with_new_state(self):
+        conds, art = self._run_fasttrack()
+        creates = _of(conds, CREATE_COIN)
+        assert len(creates) == 1
+        assert creates[0][1] == bytes(art.new_inner_puzzle_hash)
+        assert int.from_bytes(creates[0][2], "big") == SINGLETON_AMOUNT
+
+    def test_published_content_hash_matches_off_chain(self):
+        conds, art = self._run_fasttrack()
+        anns = _of(conds, CREATE_PUZZLE_ANNOUNCEMENT)
+        assert len(anns) == 1
+        msg = anns[0][1]
+        assert msg[:1] == PROTOCOL_PREFIX
+        # On-chain content_hash (tail of the announcement) must equal the
+        # off-chain driver's computation.
+        assert msg[1:] == bytes(art.new_content_hash)
+        assert msg[1:] == bytes(
+            compute_content_hash(
+                VAULT_INNER_MOD_HASH, NEW_CANONICAL_PARAMS_HASH, NEW_VAULT_VERSION
+            )
+        )
+
+    def test_assert_my_amount(self):
+        conds, _ = self._run_fasttrack()
+        amounts = _of(conds, ASSERT_MY_AMOUNT)
+        assert len(amounts) == 1
+        assert int.from_bytes(amounts[0][1], "big") == SINGLETON_AMOUNT
+
+    def test_rejects_code_change_on_fast_path(self):
+        # Hand-rolled solution attempting a CODE change via the fast-track case.
+        sol = Program.to(
+            [
+                SPEND_PARAMS_FASTTRACK,
+                SINGLETON_AMOUNT,
+                bytes32(AUTHORITY_INNER.get_tree_hash()),
+                NEW_VAULT_INNER_MOD_HASH,  # code changed — must be rejected
+                NEW_CANONICAL_PARAMS_HASH,
+                NEW_VAULT_VERSION,
+            ]
+        )
+        with pytest.raises(ValueError):
+            _run(_curry(), sol)
+
+
+# ── Code-change routine path ────────────────────────────────────────────────
+
+
+class TestRoutine:
+    def _run_routine(self):
+        state = _state()
+        art = build_routine_spend(
+            current=state,
+            authorizer_inner_puzzle_hash=bytes32(GOVERNANCE_INNER.get_tree_hash()),
+            new_vault_inner_mod_hash=NEW_VAULT_INNER_MOD_HASH,
+            new_canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            new_vault_version=NEW_VAULT_VERSION,
+        )
+        conds = _run(_curry(), art.inner_solution)
+        return conds, art
+
+    def test_allows_code_change(self):
+        conds, art = self._run_routine()
+        creates = _of(conds, CREATE_COIN)
+        assert len(creates) == 1
+        assert creates[0][1] == bytes(art.new_inner_puzzle_hash)
+
+    def test_authorization_binds_to_governance(self):
+        conds, _ = self._run_routine()
+        gov_full_ph = _singleton_full_ph(GOVERNANCE_LAUNCHER_ID, GOVERNANCE_INNER)
+        expected = compute_authorizer_announcement_id(
+            authorizer_full_puzzle_hash=gov_full_ph,
+            path_tag=TAG_ROUTINE,
+            vault_inner_mod_hash=NEW_VAULT_INNER_MOD_HASH,
+            canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            vault_version=NEW_VAULT_VERSION,
+        )
+        asserts = _of(conds, ASSERT_PUZZLE_ANNOUNCEMENT)
+        assert len(asserts) == 1
+        assert asserts[0][1] == bytes(expected)
+
+    def test_routine_approval_differs_from_fasttrack(self):
+        # Same target state, but the two tiers must produce DIFFERENT approval
+        # ids (different authorizer + path tag) so approvals can't cross tiers.
+        gov_full_ph = _singleton_full_ph(GOVERNANCE_LAUNCHER_ID, GOVERNANCE_INNER)
+        authority_full_ph = _singleton_full_ph(
+            ADMIN_AUTHORITY_LAUNCHER_ID, GOVERNANCE_INNER
+        )
+        routine = compute_authorizer_announcement_id(
+            authorizer_full_puzzle_hash=gov_full_ph,
+            path_tag=TAG_ROUTINE,
+            vault_inner_mod_hash=NEW_VAULT_INNER_MOD_HASH,
+            canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            vault_version=NEW_VAULT_VERSION,
+        )
+        fast = compute_authorizer_announcement_id(
+            authorizer_full_puzzle_hash=authority_full_ph,
+            path_tag=TAG_FASTTRACK,
+            vault_inner_mod_hash=NEW_VAULT_INNER_MOD_HASH,
+            canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            vault_version=NEW_VAULT_VERSION,
+        )
+        assert routine != fast
+
+
+# ── Replay / version protection + dispatch guards ───────────────────────────
+
+
+class TestGuards:
+    def test_driver_rejects_version_downgrade(self):
+        state = _state(vault_version=10)
+        with pytest.raises(ValueError, match="strictly exceed"):
+            build_fasttrack_spend(
+                current=state,
+                authorizer_inner_puzzle_hash=bytes32(
+                    AUTHORITY_INNER.get_tree_hash()
+                ),
+                new_canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+                new_vault_version=10,  # equal — must reject
+            )
+
+    def test_clvm_rejects_version_downgrade(self):
+        curried = _curry(vault_version=10)
+        sol = Program.to(
+            [
+                SPEND_PARAMS_FASTTRACK,
+                SINGLETON_AMOUNT,
+                bytes32(AUTHORITY_INNER.get_tree_hash()),
+                VAULT_INNER_MOD_HASH,
+                NEW_CANONICAL_PARAMS_HASH,
+                5,  # downgrade
+            ]
+        )
+        with pytest.raises(ValueError):
+            _run(curried, sol)
+
+    def test_clvm_rejects_equal_version(self):
+        curried = _curry(vault_version=10)
+        sol = Program.to(
+            [
+                SPEND_PARAMS_FASTTRACK,
+                SINGLETON_AMOUNT,
+                bytes32(AUTHORITY_INNER.get_tree_hash()),
+                VAULT_INNER_MOD_HASH,
+                NEW_CANONICAL_PARAMS_HASH,
+                10,  # equal
+            ]
+        )
+        with pytest.raises(ValueError):
+            _run(curried, sol)
+
+    def test_clvm_rejects_unknown_spend_case(self):
+        sol = Program.to(
+            [
+                99,  # unknown spend case
+                SINGLETON_AMOUNT,
+                bytes32(AUTHORITY_INNER.get_tree_hash()),
+                VAULT_INNER_MOD_HASH,
+                NEW_CANONICAL_PARAMS_HASH,
+                NEW_VAULT_VERSION,
+            ]
+        )
+        with pytest.raises(ValueError):
+            _run(_curry(), sol)
