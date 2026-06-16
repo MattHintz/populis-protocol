@@ -16,6 +16,7 @@ driver, and critically that:
 from __future__ import annotations
 
 import pytest
+from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
 from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
     SINGLETON_LAUNCHER_HASH,
@@ -32,13 +33,16 @@ from populis_puzzles.vault_version_registry_driver import (
     TAG_ROUTINE,
     VaultVersionRegistryState,
     build_fasttrack_spend,
+    build_launch_registry_bundle,
     build_routine_spend,
     canonical_params_hash_from_vault_inner,
     compute_authorizer_announcement_id,
     compute_canonical_params_hash,
     compute_content_hash,
     is_vault_current,
+    make_full_puzzle,
     make_inner_puzzle,
+    make_inner_puzzle_hash,
     parse_inner_puzzle,
     vault_version_registry_inner_mod,
     vault_version_registry_inner_mod_hash,
@@ -510,3 +514,134 @@ class TestCanonicalParamsHashAndDetection:
             vault_inner_mod_hash=bytes32(b"\x01" * 32),
             vault_canonical_params_hash=cph,
         ) is False
+
+
+class TestRegistryLaunch:
+    """Genesis launch builder — deploy the registry singleton (Brick 4c)."""
+
+    def _launch(self, *, amount=1_000_000, **overrides):
+        parent_puzzle = Program.to(1)
+        parent_coin = Coin(
+            bytes32(b"\x01" * 32),
+            bytes32(parent_puzzle.get_tree_hash()),
+            amount,
+        )
+        params = dict(
+            parent_coin=parent_coin,
+            parent_puzzle=parent_puzzle,
+            admin_authority_launcher_id=ADMIN_AUTHORITY_LAUNCHER_ID,
+            governance_launcher_id=GOVERNANCE_LAUNCHER_ID,
+            vault_inner_mod_hash=VAULT_INNER_MOD_HASH,
+            canonical_params_hash=CANONICAL_PARAMS_HASH,
+        )
+        params.update(overrides)
+        return parent_coin, build_launch_registry_bundle(**params)
+
+    def _spend_for(self, art, *, coin_name=None, puzzle_hash=None):
+        for s in art.unsigned_bundle.coin_spends:
+            if coin_name is not None and bytes32(s.coin.name()) == coin_name:
+                return s
+            if puzzle_hash is not None and bytes32(s.coin.puzzle_hash) == bytes32(puzzle_hash):
+                return s
+        raise AssertionError("no matching coin spend")
+
+    def test_bundle_has_parent_and_launcher_spends(self):
+        parent_coin, art = self._launch()
+        spends = list(art.unsigned_bundle.coin_spends)
+        assert len(spends) == 2
+        # registry_launcher_id == name of the launcher coin (child of parent).
+        launcher = Coin(parent_coin.name(), bytes32(SINGLETON_LAUNCHER_HASH), 1)
+        assert art.registry_launcher_id == bytes32(launcher.name())
+        spent = {bytes32(s.coin.name()) for s in spends}
+        assert parent_coin.name() in spent
+        assert bytes32(launcher.name()) in spent
+
+    def test_launcher_solution_commits_to_full_puzzle_hash(self):
+        _, art = self._launch()
+        launcher_spend = self._spend_for(art, puzzle_hash=SINGLETON_LAUNCHER_HASH)
+        sol = Program.from_bytes(bytes(launcher_spend.solution))
+        committed_ph = bytes32(list(sol.as_iter())[0].as_atom())
+        assert committed_ph == art.registry_full_puzzle_hash
+        # And the full puzzle hash is the singleton-wrapped inner at launch state.
+        expected = make_full_puzzle(
+            launcher_id=art.registry_launcher_id,
+            admin_authority_launcher_id=ADMIN_AUTHORITY_LAUNCHER_ID,
+            governance_launcher_id=GOVERNANCE_LAUNCHER_ID,
+            vault_inner_mod_hash=VAULT_INNER_MOD_HASH,
+            canonical_params_hash=CANONICAL_PARAMS_HASH,
+            vault_version=1,
+        ).get_tree_hash()
+        assert art.registry_full_puzzle_hash == bytes32(expected)
+
+    def test_parent_creates_launcher_and_change(self):
+        parent_coin, art = self._launch(amount=1_000_000)
+        parent_spend = self._spend_for(art, coin_name=parent_coin.name())
+        sol = Program.from_bytes(bytes(parent_spend.solution))
+        conds = [list(c.as_iter()) for c in list(sol.as_iter())[0].as_iter()]
+        create = [c for c in conds if c and c[0].as_int() == 51]
+        # Launcher coin: CREATE_COIN(SINGLETON_LAUNCHER_HASH, 1).
+        assert any(
+            bytes32(c[1].as_atom()) == bytes32(SINGLETON_LAUNCHER_HASH) and c[2].as_int() == 1
+            for c in create
+        )
+        # Change: CREATE_COIN(parent puzzle hash, amount - 1).
+        assert any(
+            bytes32(c[1].as_atom()) == bytes32(parent_coin.puzzle_hash)
+            and c[2].as_int() == parent_coin.amount - 1
+            for c in create
+        )
+
+    def test_launch_state_round_trips_and_content_hash(self):
+        _, art = self._launch()
+        inner = make_inner_puzzle(
+            admin_authority_launcher_id=ADMIN_AUTHORITY_LAUNCHER_ID,
+            governance_launcher_id=GOVERNANCE_LAUNCHER_ID,
+            vault_inner_mod_hash=VAULT_INNER_MOD_HASH,
+            canonical_params_hash=CANONICAL_PARAMS_HASH,
+            vault_version=1,
+        )
+        state = parse_inner_puzzle(inner)
+        assert state.vault_inner_mod_hash == VAULT_INNER_MOD_HASH
+        assert state.canonical_params_hash == CANONICAL_PARAMS_HASH
+        assert state.vault_version == 1
+        assert art.content_hash == state.content_hash
+        assert art.registry_inner_puzzle_hash == bytes32(inner.get_tree_hash())
+
+    def test_launch_then_fasttrack_publish_is_consistent(self):
+        """A params-only fast-track from the launched state recurries correctly."""
+        _, art = self._launch()
+        state = parse_inner_puzzle(
+            make_inner_puzzle(
+                admin_authority_launcher_id=ADMIN_AUTHORITY_LAUNCHER_ID,
+                governance_launcher_id=GOVERNANCE_LAUNCHER_ID,
+                vault_inner_mod_hash=VAULT_INNER_MOD_HASH,
+                canonical_params_hash=CANONICAL_PARAMS_HASH,
+                vault_version=1,
+            )
+        )
+        published = build_fasttrack_spend(
+            current=state,
+            authorizer_inner_puzzle_hash=bytes32(AUTHORITY_INNER.get_tree_hash()),
+            new_canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            new_vault_version=2,
+        )
+        expected_next = make_inner_puzzle_hash(
+            admin_authority_launcher_id=ADMIN_AUTHORITY_LAUNCHER_ID,
+            governance_launcher_id=GOVERNANCE_LAUNCHER_ID,
+            vault_inner_mod_hash=VAULT_INNER_MOD_HASH,  # code unchanged on fast-track
+            canonical_params_hash=NEW_CANONICAL_PARAMS_HASH,
+            vault_version=2,
+        )
+        assert published.new_inner_puzzle_hash == expected_next
+
+    def test_rejects_small_parent(self):
+        with pytest.raises(ValueError):
+            self._launch(amount=1, fee=5)
+
+    def test_rejects_non_32_byte_param(self):
+        with pytest.raises(ValueError):
+            self._launch(vault_inner_mod_hash=b"\xc3" * 31)
+
+    def test_rejects_version_below_1(self):
+        with pytest.raises(ValueError):
+            self._launch(vault_version=0)

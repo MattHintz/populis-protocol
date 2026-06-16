@@ -25,11 +25,16 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
+from chia.types.coin_spend import make_spend
 from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
+    SINGLETON_LAUNCHER,
     SINGLETON_LAUNCHER_HASH,
     SINGLETON_MOD_HASH,
+    puzzle_for_singleton,
 )
+from chia_rs import G2Element, SpendBundle
 from chia_rs.sized_bytes import bytes32
 
 from populis_puzzles import load_puzzle
@@ -497,4 +502,164 @@ def is_vault_current(
     return (
         bytes32(vault_inner_mod_hash) == registry.vault_inner_mod_hash
         and bytes32(vault_canonical_params_hash) == registry.canonical_params_hash
+    )
+
+
+# ────────────────────────────────────────────────────────────────
+# Genesis launch — deploy the registry singleton at its canonical initial state.
+# ────────────────────────────────────────────────────────────────
+
+
+def make_full_puzzle(
+    *,
+    launcher_id: bytes32,
+    admin_authority_launcher_id: bytes32,
+    governance_launcher_id: bytes32,
+    vault_inner_mod_hash: bytes32,
+    canonical_params_hash: bytes32,
+    vault_version: int,
+    singleton_mod_hash: bytes32 = bytes32(SINGLETON_MOD_HASH),
+    launcher_puzzle_hash: bytes32 = bytes32(SINGLETON_LAUNCHER_HASH),
+) -> Program:
+    """Full singleton-wrapped registry puzzle for a given launcher id + state.
+
+    The inner puzzle is launcher-agnostic (it curries no launcher id of its own);
+    the standard ``puzzle_for_singleton`` top layer supplies the launcher
+    binding.  A client that has read a registry coin from chain reconstructs the
+    same full puzzle hash with this helper to confirm it is canonical.
+    """
+    inner = make_inner_puzzle(
+        admin_authority_launcher_id=admin_authority_launcher_id,
+        governance_launcher_id=governance_launcher_id,
+        vault_inner_mod_hash=vault_inner_mod_hash,
+        canonical_params_hash=canonical_params_hash,
+        vault_version=vault_version,
+        singleton_mod_hash=singleton_mod_hash,
+        launcher_puzzle_hash=launcher_puzzle_hash,
+    )
+    return puzzle_for_singleton(launcher_id, inner)
+
+
+@dataclass(frozen=True)
+class RegistryLaunchArtifacts:
+    """Result of building the registry genesis bundle.
+
+    The caller signs ``parent_puzzle`` for ``parent_coin`` (the only coin that
+    needs a signature; the launcher spend is keyless) and pushes
+    ``unsigned_bundle``.  ``registry_launcher_id`` is the permanent id the API
+    persists and clients use to locate the singleton on coinset.org.
+    """
+
+    unsigned_bundle: SpendBundle
+    registry_launcher_id: bytes32
+    registry_inner_puzzle_hash: bytes32
+    registry_full_puzzle_hash: bytes32
+    content_hash: bytes32
+    vault_inner_mod_hash: bytes32
+    canonical_params_hash: bytes32
+    vault_version: int
+
+
+def build_launch_registry_bundle(
+    *,
+    parent_coin: Coin,
+    parent_puzzle: Program,
+    admin_authority_launcher_id: bytes32,
+    governance_launcher_id: bytes32,
+    vault_inner_mod_hash: bytes32,
+    canonical_params_hash: bytes32,
+    vault_version: int = 1,
+    fee: int = 0,
+    singleton_mod_hash: bytes32 = bytes32(SINGLETON_MOD_HASH),
+    launcher_puzzle_hash: bytes32 = bytes32(SINGLETON_LAUNCHER_HASH),
+) -> RegistryLaunchArtifacts:
+    """Build an *unsigned* spend bundle that deploys the vault-version registry.
+
+    The registry is a single protocol-wide singleton.  The operator launches it
+    once at the canonical initial state — the CURRENT vault code
+    (``vault_inner_mod_hash``) and params (``canonical_params_hash``, from
+    :func:`compute_canonical_params_hash`) at ``vault_version`` (default 1) — then
+    publishes new versions over its lifetime via :func:`build_fasttrack_spend` /
+    :func:`build_routine_spend` co-spent with the authorizing singleton.
+
+    Genesis follows the standard chia singleton launcher pattern, identical to
+    ``vault_driver.build_create_vault_bundle``: ``parent_coin`` (an ordinary XCH
+    coin under ``parent_puzzle``, >= ``1 + fee`` mojos) creates the launcher
+    coin, whose name becomes the permanent registry launcher id; the launcher
+    creates the registry singleton coin at ``registry_full_puzzle_hash``.
+
+    Returns :class:`RegistryLaunchArtifacts`.  The caller signs ``parent_puzzle``
+    for ``parent_coin`` and pushes ``unsigned_bundle``.
+    """
+    if vault_version < 1:
+        raise ValueError(f"vault_version must be >= 1 (got {vault_version})")
+    for name, value in (
+        ("admin_authority_launcher_id", admin_authority_launcher_id),
+        ("governance_launcher_id", governance_launcher_id),
+        ("vault_inner_mod_hash", vault_inner_mod_hash),
+        ("canonical_params_hash", canonical_params_hash),
+    ):
+        if len(value) != 32:
+            raise ValueError(f"{name} must be 32 bytes, got {len(value)}")
+
+    # Launcher coin: created by parent_coin, with the canonical launcher puzzle
+    # and the odd singleton amount.  Its name is the permanent registry id.
+    launcher_coin = Coin(
+        parent_coin.name(), bytes32(SINGLETON_LAUNCHER_HASH), SINGLETON_AMOUNT
+    )
+    registry_launcher_id = bytes32(launcher_coin.name())
+
+    full_puzzle = make_full_puzzle(
+        launcher_id=registry_launcher_id,
+        admin_authority_launcher_id=admin_authority_launcher_id,
+        governance_launcher_id=governance_launcher_id,
+        vault_inner_mod_hash=vault_inner_mod_hash,
+        canonical_params_hash=canonical_params_hash,
+        vault_version=vault_version,
+        singleton_mod_hash=singleton_mod_hash,
+        launcher_puzzle_hash=launcher_puzzle_hash,
+    )
+    full_puzzle_hash = bytes32(full_puzzle.get_tree_hash())
+    inner_puzzle_hash = make_inner_puzzle_hash(
+        admin_authority_launcher_id=admin_authority_launcher_id,
+        governance_launcher_id=governance_launcher_id,
+        vault_inner_mod_hash=vault_inner_mod_hash,
+        canonical_params_hash=canonical_params_hash,
+        vault_version=vault_version,
+        singleton_mod_hash=singleton_mod_hash,
+        launcher_puzzle_hash=launcher_puzzle_hash,
+    )
+
+    # Launcher solution: (singleton_full_puzzle_hash amount key_value_list).
+    launcher_solution = Program.to([full_puzzle_hash, SINGLETON_AMOUNT, []])
+
+    change_amount = parent_coin.amount - SINGLETON_AMOUNT - fee
+    if change_amount < 0:
+        raise ValueError("parent_coin too small to cover 1 mojo + fee")
+
+    # parent_puzzle is a p2_delegated_puzzle: solution = (delegated_conditions . ()).
+    conditions = [
+        Program.to([51, bytes32(SINGLETON_LAUNCHER_HASH), SINGLETON_AMOUNT]),  # create launcher
+    ]
+    if change_amount > 0:
+        conditions.append(Program.to([51, parent_coin.puzzle_hash, change_amount]))
+    if fee > 0:
+        conditions.append(Program.to([52, fee]))  # RESERVE_FEE
+    parent_solution = Program.to([Program.to(conditions), []])
+
+    parent_spend = make_spend(parent_coin, parent_puzzle, parent_solution)
+    launcher_spend = make_spend(launcher_coin, SINGLETON_LAUNCHER, launcher_solution)
+    unsigned_bundle = SpendBundle([parent_spend, launcher_spend], G2Element())
+
+    return RegistryLaunchArtifacts(
+        unsigned_bundle=unsigned_bundle,
+        registry_launcher_id=registry_launcher_id,
+        registry_inner_puzzle_hash=inner_puzzle_hash,
+        registry_full_puzzle_hash=full_puzzle_hash,
+        content_hash=compute_content_hash(
+            vault_inner_mod_hash, canonical_params_hash, vault_version
+        ),
+        vault_inner_mod_hash=bytes32(vault_inner_mod_hash),
+        canonical_params_hash=bytes32(canonical_params_hash),
+        vault_version=vault_version,
     )
