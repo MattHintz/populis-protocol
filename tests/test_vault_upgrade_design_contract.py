@@ -74,6 +74,31 @@ def test_publish_authority_binds_to_quorum_not_a_key(doc_text: str) -> None:
     assert "admin_roster_update" in low
 
 
+def test_governance_model_decision_is_documented(doc_text: str) -> None:
+    """The PGT-vs-admin authorization decision must be explicitly pinned.
+
+    Answers "is this properly documented?": the current reality (PGT governance
+    is mint-scoped; vaults out of scope; committee vote unwired; admin<->PGT
+    hook reserved) plus the open A/B/C decision for vault-version publishes.
+    """
+    low = _lower(doc_text)
+    assert "governance model" in low
+    # Current reality: PGT governance is mint-scoped; vaults are out of scope.
+    assert "three fixed bills" in low
+    for bill in ("MINT", "FREEZE", "SETTLE"):
+        assert bill in doc_text
+    assert "out of scope" in low
+    assert "ratif" in low  # ratify / ratification
+    # The admin<->PGT hook is reserved + unwired.
+    assert "PGT_GOVERNANCE_PUZZLE_HASH" in doc_text
+    # The committee on-chain PGT-VOTE path is not wired (501).
+    assert "/admin/committee/vote" in doc_text
+    assert "501" in doc_text
+    # The open A/B/C decision is recorded as the top blocking decision.
+    assert "pgt-ratified" in low
+    assert "top blocking decision" in low
+
+
 def test_monotonic_version_guard(doc_text: str) -> None:
     """VAULT_VERSION must be monotonic; upgrade offered only on a higher version."""
     assert "VAULT_VERSION" in doc_text

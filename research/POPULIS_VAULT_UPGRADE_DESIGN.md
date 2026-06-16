@@ -109,12 +109,64 @@ The exact announcement binding (coin vs puzzle announcement, and how the
 registry identifies the authority's current coin from its launcher id) is a
 Brick 2 detail pinned with consensus tests. The invariant is that
 authorization is the authority's **live quorum** — never a key curried into
-the registry.
+the registry. Whether a **PGT staker ratification vote is *also* required**
+(admin proposes → PGT approves) is an open governance decision — see
+**Governance model** below.
 
 Discovery: the registry singleton's launcher id is published in
 `deployment_manifest.json` and the portal `environment.ts` as a public,
 chain-anchored constant. Clients walk its lineage on coinset.org to read the
 latest state — identical to how `protocol_config` is read today.
+
+## Governance model: who authorizes a version publish
+
+This is the most important open decision, recorded here so it is never
+silently assumed.
+
+### Current protocol reality (2026-06)
+
+- **PGT staked governance exists but is mint-scoped.**
+  `governance_singleton_inner.clsp` (the proposal tracker) enforces a real
+  PGT-stake quorum (`VOTE_TALLY * 10000 >= QUORUM_BPS * PGT_TOTAL_SUPPLY`) but
+  its `dispatch_bill` handles only **three fixed bills**: `MINT` (→ DID),
+  `FREEZE` (→ pool), `SETTLE` (→ pool); any other tag fails `(x)`. Per
+  `docs/GOVERNANCE_V2_DESIGN.md` §1–3, this is intentional, and
+  `vault_singleton_inner.clsp` is explicitly listed **"unchanged / out of
+  scope"** in that design's contract inventory. There is **no vault/protocol
+  bill type today.**
+- **The admin authority is separate and self-governed** by its own MofN
+  (`admin_authority_v2`). Its curried `PGT_GOVERNANCE_PUZZLE_HASH` is a
+  **reserved, unwired hook** ("for ADMIN_SLOT_* spends, out of scope")
+  defaulting to zeros — PGT does not gate admin-authority actions today.
+- **The committee on-chain PGT-VOTE submission path is not wired yet.**
+  `/admin/committee/vote` returns `501` and the portal `/committee` page is
+  "not wired yet." The admin → propose → PGT → ratify → execute lifecycle is
+  documented for **mints** (`ADMIN_DESK_DESIGN.md` §5) but not finished
+  end-to-end.
+
+### The decision for vault upgrades
+
+A canonical vault-version publish is a protocol-significant change. Options:
+
+- **(A) PGT-ratified (recommended, most decentralized).** The admin/committee
+  PROPOSES a new vault version; PGT stakers RATIFY via a quorum vote; only then
+  does the registry publish. The registry's update spend asserts the proposal
+  tracker's EXECUTE message for a NEW `vault-version` bill type. Requires (1) a
+  new bill in `governance_singleton_inner.clsp` `dispatch_bill` (a **consensus
+  change** — the tracker was deliberately 3-bill-scoped), and (2) the
+  committee-vote path to be wired. This matches "admin proposes, staked PGT
+  approves downstream."
+- **(B) Admin/committee-quorum-only (Brick 1 as currently written).** The
+  `admin_authority_v2` MofN alone authorizes the publish. Simpler; fits
+  emergency/security patches; but **NOT** PGT-ratified.
+- **(C) Tiered.** Routine version upgrades → PGT-ratified (A); narrowly-scoped
+  emergency security patches → admin MofN fast-track (B) behind a published PGT
+  veto/cooldown window.
+
+Until this is chosen, the authorization described above (the
+`admin_authority_v2` quorum) is **only the proposal/curation authority**, not a
+final PGT-less approval. The chosen model MUST be pinned before Brick 2/3 build
+the registry and any new bill type.
 
 ## Vault version identity & outdated detection (client-side, no backend)
 
@@ -176,6 +228,11 @@ that all subsequent upgrades are seamless.
 ## Phased brick plan
 
 - **Brick 1 (this doc):** design contract + docs-contract test.
+- **Brick 1.5 (governance decision):** pin the governance model (A / B / C
+  above) for version publishes. If A or C, spec the new `vault-version` bill
+  type in `governance_singleton_inner.clsp` and finish the committee PGT-VOTE
+  wiring (`/admin/committee/vote`, portal `/committee`) **before** Brick 2/3
+  grant publish authority.
 - **Brick 2 (protocol):** `vault_version_registry_inner.clsp` + driver + tests,
   mirroring `protocol_config_inner` (authority-quorum-authorized via
   `admin_authority_v2`, monotonic version, content-hash, announcement).
@@ -191,6 +248,9 @@ that all subsequent upgrades are seamless.
 
 ## Open decisions
 
+- **Governance model (A/B/C) for version publishes** — does a vault-version
+  publish require PGT staker ratification, or admin/committee quorum alone? See
+  **Governance model** above. This is the top blocking decision.
 - RESOLVED: the registry binds to the `admin_authority_v2` quorum by launcher
   id (no standalone key). It resolves to your 1-of-1 today and to the committee
   MofN as the roster grows, with no redeploy.
