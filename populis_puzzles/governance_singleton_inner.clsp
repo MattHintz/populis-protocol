@@ -119,9 +119,18 @@
     (defconstant EXEC_TAG 0x45584543)
 
     ;; Bill operation tags (single ASCII bytes)
-    (defconstant BILL_MINT 0x4d)        ; 'M'
-    (defconstant BILL_FREEZE 0x46)      ; 'F'
-    (defconstant BILL_SETTLE 0x53)      ; 'S'
+    (defconstant BILL_MINT 0x4d)          ; 'M'
+    (defconstant BILL_FREEZE 0x46)        ; 'F'
+    (defconstant BILL_SETTLE 0x53)        ; 'S'
+    (defconstant BILL_VAULT_VERSION 0x56) ; 'V' — ratify a vault_version_registry code change
+
+    ;; vault_version_registry_inner.clsp routine-path approval tag ("RT").  The
+    ;; registry's SPEND_CODE_ROUTINE asserts a PUZZLE_ANNOUNCEMENT keyed by the
+    ;; governance coin's full puzzle hash with message
+    ;;   PROTOCOL_PREFIX || REGISTRY_TAG_ROUTINE || content_hash(new_state)
+    ;; so EXECUTE of a VAULT_VERSION bill emits exactly that announcement.
+    ;; MUST equal vault_version_registry_inner.clsp `TAG_ROUTINE`.
+    (defconstant REGISTRY_TAG_ROUTINE 0x5254)
 
     ;; Pool message tags (matches pool_singleton_inner.clsp existing format)
     (defconstant POOL_GOV_TAG 0x474f5620)   ; "GOV "
@@ -327,7 +336,20 @@
                         (list SEND_MESSAGE 0x10
                             (concat PROTOCOL_PREFIX
                                 (sha256tree (list POOL_SETT_TAG (f (r bill_op)) (f (r (r bill_op))) (f (r (r (r bill_op)))))))))
-                    (x))))
+                    (if (= (f bill_op) BILL_VAULT_VERSION)
+                        ;; VAULT_VERSION: ratify a vault_version_registry CODE change.
+                        ;; Emit the routine-path approval the registry's
+                        ;; SPEND_CODE_ROUTINE asserts, keyed by THIS gov coin's full
+                        ;; puzzle hash:
+                        ;;   PROTOCOL_PREFIX || REGISTRY_TAG_ROUTINE || content_hash
+                        ;; where content_hash = sha256tree(new_code new_params new_version).
+                        ;; No SEND_MESSAGE — the registry is the asserter and governance
+                        ;; the announcer (same shape as the admin fast-track path).
+                        (list
+                            (list CREATE_PUZZLE_ANNOUNCEMENT
+                                (concat PROTOCOL_PREFIX REGISTRY_TAG_ROUTINE
+                                    (sha256tree (list (f (r bill_op)) (f (r (r bill_op))) (f (r (r (r bill_op)))))))))
+                        (x)))))
     )
 
     ;; SPEND CASE 3 — EXECUTE

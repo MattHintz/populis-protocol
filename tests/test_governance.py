@@ -28,6 +28,7 @@ from populis_puzzles.pgt_driver import (
     BILL_FREEZE,
     BILL_MINT,
     BILL_SETTLE,
+    BILL_VAULT_VERSION,
     SINGLETON_LAUNCHER_HASH,
     TRK_EXECUTE,
     TRK_EXPIRE,
@@ -36,13 +37,17 @@ from populis_puzzles.pgt_driver import (
     bill_freeze,
     bill_mint,
     bill_settle,
+    bill_vault_version,
     cat_pgt_free_puzzle_hash,
     pgt_free_inner_mod,
     pgt_locked_inner_mod,
     proposal_hash_from_bill,
     proposal_tracker_inner_puzzle,
     proposal_tracker_mod,
+    vault_version_approval_message,
+    vault_version_content_hash,
 )
+from populis_puzzles import vault_version_registry_driver as vvr
 
 
 PuzzleError = ValueError
@@ -656,3 +661,129 @@ class TestDispatch:
         ).get_tree_hash()
 
         assert _atom_bytes(cc[1]) == expected_next
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#                       EXECUTE — vault-version bill (Brick 3.5a)
+# ─────────────────────────────────────────────────────────────────────────────
+class TestExecuteVaultVersion:
+    """The vault-version bill is governance's ROUTINE-path authorizer for
+    ``vault_version_registry`` CODE changes.  On EXECUTE the tracker must emit
+    the exact ``CREATE_PUZZLE_ANNOUNCEMENT`` the registry's SPEND_CODE_ROUTINE
+    asserts — bound byte-for-byte to ``vault_version_registry_driver``.
+    """
+
+    NEW_CODE = bytes32(b"\x10" * 32)
+    NEW_PARAMS = bytes32(b"\x20" * 32)
+    NEW_VERSION = 7
+
+    def _bill(self):
+        bill = bill_vault_version(self.NEW_CODE, self.NEW_PARAMS, self.NEW_VERSION)
+        return bill, proposal_hash_from_bill(bill)
+
+    def test_execute_emits_routine_approval_announcement(self):
+        bill, ph = self._bill()
+        curried = _curry_tracker(
+            proposal_hash=ph,
+            bill_op=bill,
+            vote_tally=600_000,  # 60% > 50% quorum
+            voting_deadline=2_000_000_000,
+        )
+        my_id, my_ph = _tracker_my_id_and_ph(curried)
+        sol = Program.to([my_id, my_ph, TRACKER_AMOUNT, TRK_EXECUTE, 0])
+
+        out = curried.run(sol)
+        conds = _conds_to_list(out)
+        codes = [_atom_int(c[0]) for c in conds]
+
+        # State machine: reset to IDLE + deadline passed.
+        assert CREATE_COIN in codes
+        assert ASSERT_SECONDS_ABSOLUTE in codes
+        # Vault-version dispatches via a puzzle announcement, NOT a message,
+        # and asserts nothing (registry is the asserter, gov the announcer).
+        assert SEND_MESSAGE not in codes
+        assert ASSERT_PUZZLE_ANNOUNCEMENT not in codes
+
+        # The governance driver and the registry driver must agree on the
+        # routine approval message byte-for-byte.
+        expected_msg = vault_version_approval_message(
+            self.NEW_CODE, self.NEW_PARAMS, self.NEW_VERSION
+        )
+        registry_msg = vvr.compute_approval_message(
+            path_tag=vvr.TAG_ROUTINE,
+            vault_inner_mod_hash=self.NEW_CODE,
+            canonical_params_hash=self.NEW_PARAMS,
+            vault_version=self.NEW_VERSION,
+        )
+        assert expected_msg == registry_msg
+
+        # EXECUTE emits two announcements: the EXEC release (locked PGT) and the
+        # routine approval.  The registry asserts the latter.
+        announcements = [
+            _atom_bytes(c[1])
+            for c in conds
+            if _atom_int(c[0]) == CREATE_PUZZLE_ANNOUNCEMENT
+        ]
+        assert expected_msg in announcements
+
+        # The content_hash carried in the message equals both drivers'.
+        assert expected_msg == b"\x50" + b"\x52\x54" + bytes(
+            vvr.compute_content_hash(self.NEW_CODE, self.NEW_PARAMS, self.NEW_VERSION)
+        )
+        assert expected_msg[3:] == bytes(
+            vault_version_content_hash(self.NEW_CODE, self.NEW_PARAMS, self.NEW_VERSION)
+        )
+
+        # State resets to IDLE — the registry publish is the only side effect.
+        cc = next(c for c in conds if _atom_int(c[0]) == CREATE_COIN)
+        expected_idle = proposal_tracker_inner_puzzle(
+            TRACKER_STRUCT, PGT_FREE_MOD_HASH, PGT_LOCKED_MOD_HASH,
+            CAT_MOD_HASH, PGT_TAIL_HASH, DID_PUZHASH, POOL_STRUCT,
+            QUORUM_BPS, VOTING_WINDOW, PGT_TOTAL_SUPPLY, MIN_PROPOSAL_STAKE,
+            proposal_hash=0, bill_operation=0, vote_tally=0, voting_deadline=0,
+        ).get_tree_hash()
+        assert _atom_bytes(cc[1]) == expected_idle
+
+    def test_execute_rejected_below_quorum(self):
+        bill, ph = self._bill()
+        curried = _curry_tracker(
+            proposal_hash=ph,
+            bill_op=bill,
+            vote_tally=490_000,  # 49% < 50% quorum
+            voting_deadline=2_000_000_000,
+        )
+        my_id, my_ph = _tracker_my_id_and_ph(curried)
+        sol = Program.to([my_id, my_ph, TRACKER_AMOUNT, TRK_EXECUTE, 0])
+        with pytest.raises(PuzzleError):
+            curried.run(sol)
+
+    def test_propose_accepts_vault_version_bill(self):
+        """PROPOSE opens with a vault-version bill (schema: ph == sha256tree(bill))."""
+        bill, ph = self._bill()
+        curried = _curry_tracker()  # idle
+        my_id, my_ph = _tracker_my_id_and_ph(curried)
+        sol = Program.to([
+            my_id, my_ph, TRACKER_AMOUNT,
+            TRK_PROPOSE,
+            [ph, bill, VOTER_INNER_PUZHASH, MIN_PROPOSAL_STAKE, 2_000_000_000],
+        ])
+        out = curried.run(sol)
+        conds = _conds_to_list(out)
+        cc = next(c for c in conds if _atom_int(c[0]) == CREATE_COIN)
+        expected_next = proposal_tracker_inner_puzzle(
+            TRACKER_STRUCT, PGT_FREE_MOD_HASH, PGT_LOCKED_MOD_HASH,
+            CAT_MOD_HASH, PGT_TAIL_HASH, DID_PUZHASH, POOL_STRUCT,
+            QUORUM_BPS, VOTING_WINDOW, PGT_TOTAL_SUPPLY, MIN_PROPOSAL_STAKE,
+            proposal_hash=ph, bill_operation=bill,
+            vote_tally=MIN_PROPOSAL_STAKE, voting_deadline=2_000_000_000,
+        ).get_tree_hash()
+        assert _atom_bytes(cc[1]) == expected_next
+
+    def test_bill_layout_field_extraction(self):
+        """(V code params version) layout — guards the puzzle's f/r field walk."""
+        bill, _ = self._bill()
+        assert _atom_bytes(bill.first()) == BILL_VAULT_VERSION
+        rest = bill.rest()
+        assert _atom_bytes(rest.first()) == self.NEW_CODE
+        assert _atom_bytes(rest.rest().first()) == self.NEW_PARAMS
+        assert _atom_int(rest.rest().rest().first()) == self.NEW_VERSION

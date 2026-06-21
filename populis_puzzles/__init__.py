@@ -87,6 +87,12 @@ PUZZLE_FILENAMES = (
 # All four A.x puzzles' mod hashes therefore changed; the new values
 # are pinned in the corresponding driver caches and API singletons.py.
 FROZEN_CHECKSUM: Optional[str] = (
+    # 2026-06-21: refrozen for the governance vault-version bill (Brick 3.5a).
+    #   - governance_singleton_inner.clsp gained the BILL_VAULT_VERSION ('V')
+    #     dispatch branch: EXECUTE of a vault-version bill emits the routine-path
+    #     CREATE_PUZZLE_ANNOUNCEMENT the vault_version_registry SPEND_CODE_ROUTINE
+    #     asserts (PROTOCOL_PREFIX || REGISTRY_TAG_ROUTINE || content_hash), so its
+    #     mod hash changed.  Only this one puzzle changed in this freeze.
     # 2026-06-16: refrozen for the vault-upgrade feature.  This value also
     # absorbs a previously-unfrozen *committed* change — c8eef7e
     # (eip712: vault chainId -> Base Sepolia 84532) changed
@@ -97,7 +103,7 @@ FROZEN_CHECKSUM: Optional[str] = (
     #   - ceb141a: vault_singleton_inner gained the 'm' (migrate) spend case
     #     for the vault upgrade flow (research/POPULIS_VAULT_UPGRADE_DESIGN.md).
     #   - vault_version_registry_inner.clsp added to PUZZLE_FILENAMES.
-    "87f7acbb66922a0012ab5e8accf7ef08a2c75e25c872d88833b5ac102bbb4adf"
+    "0936af4f5548ca42367161da72d8bc9a0cdd91f2d426020be5852554f9b280bc"
 )
 
 # ── Cache ──

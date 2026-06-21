@@ -80,9 +80,21 @@ TRK_EXECUTE = 3
 TRK_EXPIRE = 4
 
 # Bill operation tags (single ASCII bytes)
-BILL_MINT = b"M"     # 0x4d
-BILL_FREEZE = b"F"   # 0x46
-BILL_SETTLE = b"S"   # 0x53
+BILL_MINT = b"M"           # 0x4d
+BILL_FREEZE = b"F"         # 0x46
+BILL_SETTLE = b"S"         # 0x53
+BILL_VAULT_VERSION = b"V"  # 0x56 — ratify a vault_version_registry code change
+
+# Populis announcement namespace prefix (utility_macros.clib PROTOCOL_PREFIX).
+PROTOCOL_PREFIX = bytes.fromhex("50")  # "P"
+
+# vault_version_registry_inner.clsp routine-path approval tag ("RT").  The
+# governance tracker's EXECUTE of a VAULT_VERSION bill emits a puzzle
+# announcement with message PROTOCOL_PREFIX || REGISTRY_TAG_ROUTINE ||
+# content_hash, which the registry's SPEND_CODE_ROUTINE asserts.  MUST equal
+# both governance_singleton_inner.clsp `REGISTRY_TAG_ROUTINE` and
+# vault_version_registry_inner.clsp `TAG_ROUTINE`.
+REGISTRY_TAG_ROUTINE = bytes.fromhex("5254")  # "RT"
 
 
 # ── Singleton-struct construction ────────────────────────────────────────────
@@ -272,6 +284,78 @@ def bill_freeze(new_pool_status: int) -> Program:
 def bill_settle(splitxch_root: bytes32, total_amount: int, num_deeds: int) -> Program:
     """SETTLE bill: governance approves a batch settlement."""
     return Program.to((BILL_SETTLE, (splitxch_root, (total_amount, (num_deeds, 0)))))
+
+
+def bill_vault_version(
+    new_vault_inner_mod_hash: bytes32,
+    new_canonical_params_hash: bytes32,
+    new_vault_version: int,
+) -> Program:
+    """VAULT_VERSION bill: PGT quorum ratifies a vault-version registry CODE change.
+
+    The bill carries the next registry state ``(code, params, version)`` so the
+    proposal hash (``sha256tree(bill)``) binds it at PROPOSE time and the
+    tracker's EXECUTE can reconstruct the registry's content hash.  On EXECUTE,
+    ``dispatch_bill`` emits ``CREATE_PUZZLE_ANNOUNCEMENT`` with message
+    :func:`vault_version_approval_message`, which the
+    ``vault_version_registry_inner.clsp`` SPEND_CODE_ROUTINE asserts.
+
+    Layout ``(V . (code . (params . (version . 0))))`` so the puzzle's
+    ``(f (r bill_op))`` / ``(f (r (r bill_op)))`` / ``(f (r (r (r bill_op))))``
+    pick ``code`` / ``params`` / ``version`` respectively.
+    """
+    for name, value in (
+        ("new_vault_inner_mod_hash", new_vault_inner_mod_hash),
+        ("new_canonical_params_hash", new_canonical_params_hash),
+    ):
+        if len(value) != 32:
+            raise ValueError(f"{name} must be 32 bytes, got {len(value)}")
+    return Program.to(
+        (
+            BILL_VAULT_VERSION,
+            (new_vault_inner_mod_hash, (new_canonical_params_hash, (new_vault_version, 0))),
+        )
+    )
+
+
+def vault_version_content_hash(
+    new_vault_inner_mod_hash: bytes32,
+    new_canonical_params_hash: bytes32,
+    new_vault_version: int,
+) -> bytes32:
+    """``sha256tree([code, params, version])`` — the registry's content hash.
+
+    MUST equal ``vault_version_registry_driver.compute_content_hash`` and the
+    on-chain ``(sha256tree (list ...))`` the governance dispatch emits.
+    """
+    return bytes32(
+        Program.to(
+            [new_vault_inner_mod_hash, new_canonical_params_hash, new_vault_version]
+        ).get_tree_hash()
+    )
+
+
+def vault_version_approval_message(
+    new_vault_inner_mod_hash: bytes32,
+    new_canonical_params_hash: bytes32,
+    new_vault_version: int,
+) -> bytes:
+    """The CREATE_PUZZLE_ANNOUNCEMENT message governance EXECUTE emits.
+
+    ``PROTOCOL_PREFIX || REGISTRY_TAG_ROUTINE || content_hash`` — byte-identical
+    to ``vault_version_registry_driver.compute_approval_message(path_tag=TAG_ROUTINE)``
+    so the registry's ASSERT_PUZZLE_ANNOUNCEMENT (keyed by the governance coin's
+    full puzzle hash) pairs with it.
+    """
+    return (
+        PROTOCOL_PREFIX
+        + REGISTRY_TAG_ROUTINE
+        + bytes(
+            vault_version_content_hash(
+                new_vault_inner_mod_hash, new_canonical_params_hash, new_vault_version
+            )
+        )
+    )
 
 
 def proposal_hash_from_bill(bill: Program) -> bytes32:
