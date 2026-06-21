@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
 from chia.types.coin_spend import make_spend
+from chia.wallet.lineage_proof import LineageProof
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     solution_for_conditions,
 )
@@ -36,9 +37,11 @@ from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
     SINGLETON_LAUNCHER_HASH,
     SINGLETON_MOD_HASH,
     puzzle_for_singleton,
+    solution_for_singleton,
 )
-from chia_rs import G2Element, SpendBundle
+from chia_rs import CoinSpend, G2Element, SpendBundle
 from chia_rs.sized_bytes import bytes32
+from chia_rs.sized_ints import uint64
 
 from populis_puzzles import load_puzzle
 
@@ -460,6 +463,62 @@ def build_routine_spend(
         my_amount=my_amount,
         path_tag=TAG_ROUTINE,
     )
+
+
+def _full_puzzle_for_state(
+    current: VaultVersionRegistryState, registry_launcher_id: bytes32
+) -> Program:
+    """Singleton-wrapped current-state registry puzzle (reveal for a spend)."""
+    inner = make_inner_puzzle(
+        admin_authority_launcher_id=current.admin_authority_launcher_id,
+        governance_launcher_id=current.governance_launcher_id,
+        vault_inner_mod_hash=current.vault_inner_mod_hash,
+        canonical_params_hash=current.canonical_params_hash,
+        vault_version=current.vault_version,
+        singleton_mod_hash=current.singleton_mod_hash,
+        launcher_puzzle_hash=current.launcher_puzzle_hash,
+    )
+    return puzzle_for_singleton(registry_launcher_id, inner)
+
+
+def build_routine_coin_spend(
+    *,
+    registry_coin: Coin,
+    current: VaultVersionRegistryState,
+    registry_launcher_id: bytes32,
+    lineage_proof: LineageProof,
+    authorizer_inner_puzzle_hash: bytes32,
+    new_vault_inner_mod_hash: bytes32,
+    new_canonical_params_hash: bytes32,
+    new_vault_version: int,
+) -> tuple[CoinSpend, PublishSpendArtifacts]:
+    """Singleton-wrapped code-change routine publish, ready for a SpendBundle.
+
+    Wraps :func:`build_routine_spend` in the standard singleton top layer so the
+    spend can go straight into a bundle.  The caller MUST co-spend the
+    authorizing governance proposal tracker — its EXECUTE of the matching
+    ``VAULT_VERSION`` bill emits the ``CREATE_PUZZLE_ANNOUNCEMENT`` this spend's
+    ``ASSERT_PUZZLE_ANNOUNCEMENT`` requires; without it the bundle is rejected.
+
+    ``authorizer_inner_puzzle_hash`` is the governance tracker's EXECUTE-state
+    inner puzzle hash (the registry keys the announcement by that singleton's
+    full puzzle hash).  Returns the wrapped :class:`CoinSpend` plus the
+    :class:`PublishSpendArtifacts` (new state hashes + approval message) for the
+    caller to assert against.
+    """
+    art = build_routine_spend(
+        current=current,
+        authorizer_inner_puzzle_hash=authorizer_inner_puzzle_hash,
+        new_vault_inner_mod_hash=new_vault_inner_mod_hash,
+        new_canonical_params_hash=new_canonical_params_hash,
+        new_vault_version=new_vault_version,
+        my_amount=registry_coin.amount,
+    )
+    full_puzzle = _full_puzzle_for_state(current, registry_launcher_id)
+    full_solution = solution_for_singleton(
+        lineage_proof, uint64(registry_coin.amount), art.inner_solution
+    )
+    return make_spend(registry_coin, full_puzzle, full_solution), art
 
 
 # ─────────────────────────────────────────────────────────────────────

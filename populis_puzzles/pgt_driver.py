@@ -17,8 +17,17 @@ This module exposes:
 """
 from __future__ import annotations
 
+from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
+from chia.types.coin_spend import make_spend
+from chia.wallet.lineage_proof import LineageProof
+from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
+    puzzle_for_singleton,
+    solution_for_singleton,
+)
+from chia_rs import CoinSpend
 from chia_rs.sized_bytes import bytes32
+from chia_rs.sized_ints import uint64
 
 from populis_puzzles import load_puzzle
 
@@ -361,6 +370,48 @@ def vault_version_approval_message(
 def proposal_hash_from_bill(bill: Program) -> bytes32:
     """The proposal hash is sha256tree of the bill operation."""
     return bytes32(bill.get_tree_hash())
+
+
+# ── Tracker EXECUTE coin spend (singleton-wrapped) ──────────────────────────
+def build_tracker_execute_coin_spend(
+    *,
+    tracker_coin: Coin,
+    tracker_inner_puzzle: Program,
+    tracker_launcher_id: bytes32,
+    lineage_proof: LineageProof,
+) -> CoinSpend:
+    """Singleton-wrapped EXECUTE spend for the governance proposal tracker.
+
+    ``tracker_inner_puzzle`` must already be curried into its OPEN/executable
+    state — an active proposal whose ``VOTE_TALLY`` meets quorum and whose
+    ``VOTING_DEADLINE`` has passed (``ASSERT_SECONDS_ABSOLUTE`` is emitted, so
+    the spending block's timestamp must be at or after the deadline).  EXECUTE
+    dispatches the curried bill and resets the tracker to IDLE:
+
+      * MINT/FREEZE/SETTLE  -> emits the bill's ``SEND_MESSAGE`` to DID/pool.
+      * VAULT_VERSION       -> emits the routine-path ``CREATE_PUZZLE_ANNOUNCEMENT``
+        the co-spent ``vault_version_registry`` SPEND_CODE_ROUTINE asserts
+        (see :func:`vault_version_approval_message`).
+
+    Generic across bill types.  The inner solution layout matches
+    ``governance_singleton_inner.clsp``'s dispatcher:
+    ``(my_id my_inner_puzzlehash my_amount TRK_EXECUTE ())``.  EXECUTE takes no
+    extra params, so the trailing element is ``()``.
+    """
+    inner_solution = Program.to(
+        [
+            tracker_coin.name(),
+            tracker_inner_puzzle.get_tree_hash(),
+            tracker_coin.amount,
+            TRK_EXECUTE,
+            0,
+        ]
+    )
+    full_puzzle = puzzle_for_singleton(tracker_launcher_id, tracker_inner_puzzle)
+    full_solution = solution_for_singleton(
+        lineage_proof, uint64(tracker_coin.amount), inner_solution
+    )
+    return make_spend(tracker_coin, full_puzzle, full_solution)
 
 
 # ── CAT-wrapped PGT helpers (for tests / drivers building announcements) ─────
