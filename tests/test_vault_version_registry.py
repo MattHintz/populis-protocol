@@ -577,7 +577,11 @@ class TestRegistryLaunch:
         parent_coin, art = self._launch(amount=1_000_000)
         parent_spend = self._spend_for(art, coin_name=parent_coin.name())
         sol = Program.from_bytes(bytes(parent_spend.solution))
-        conds = [list(c.as_iter()) for c in list(sol.as_iter())[0].as_iter()]
+        # solution_for_conditions = [[], delegated_puzzle, 0]
+        # delegated_puzzle = (1 . conditions)
+        delegated_puzzle = sol.rest().first()
+        conditions_list = delegated_puzzle.rest()
+        conds = [list(c.as_iter()) for c in conditions_list.as_iter()]
         create = [c for c in conds if c and c[0].as_int() == 51]
         # Launcher coin: CREATE_COIN(SINGLETON_LAUNCHER_HASH, 1).
         assert any(

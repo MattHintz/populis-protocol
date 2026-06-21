@@ -49,6 +49,7 @@ from chia.wallet.lineage_proof import LineageProof
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
     puzzle_for_pk,
     puzzle_hash_for_synthetic_public_key,
+    solution_for_conditions,
 )
 from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
     SINGLETON_LAUNCHER,
@@ -1003,8 +1004,7 @@ def build_create_vault_bundle(
     change_amount = parent_coin.amount - SINGLETON_AMOUNT - fee
     assert change_amount >= 0, "parent coin too small to cover 1 mojo + fee"
 
-    # Build p2_delegated_puzzle solution directly:
-    # solution = (q . conditions)  where conditions drive CREATE_COIN outputs + fee
+    # Build p2_delegated_puzzle solution for the parent coin.
     conditions = [
         Program.to([51, SINGLETON_LAUNCHER_HASH, SINGLETON_AMOUNT]),  # launcher coin
     ]
@@ -1012,7 +1012,7 @@ def build_create_vault_bundle(
         conditions.append(Program.to([51, parent_coin.puzzle_hash, change_amount]))
     if fee > 0:
         conditions.append(Program.to([52, fee]))  # RESERVE_FEE
-    parent_solution = Program.to([Program.to(conditions), []])
+    parent_solution = solution_for_conditions(conditions)
 
     parent_spend = make_spend(parent_coin, parent_puzzle, parent_solution)
     # chia-rs 0.41's `make_spend` accepts Program directly and handles serialization.

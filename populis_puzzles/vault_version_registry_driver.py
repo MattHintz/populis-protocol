@@ -28,6 +28,9 @@ from dataclasses import dataclass
 from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
 from chia.types.coin_spend import make_spend
+from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import (
+    solution_for_conditions,
+)
 from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
     SINGLETON_LAUNCHER,
     SINGLETON_LAUNCHER_HASH,
@@ -645,7 +648,7 @@ def build_launch_registry_bundle(
         conditions.append(Program.to([51, parent_coin.puzzle_hash, change_amount]))
     if fee > 0:
         conditions.append(Program.to([52, fee]))  # RESERVE_FEE
-    parent_solution = Program.to([Program.to(conditions), []])
+    parent_solution = solution_for_conditions(conditions)
 
     parent_spend = make_spend(parent_coin, parent_puzzle, parent_solution)
     launcher_spend = make_spend(launcher_coin, SINGLETON_LAUNCHER, launcher_solution)
