@@ -20,6 +20,11 @@ from __future__ import annotations
 from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.program import Program
 from chia.types.coin_spend import make_spend
+from chia.wallet.cat_wallet.cat_utils import (
+    CAT_MOD,
+    SpendableCAT,
+    unsigned_spend_bundle_for_spendable_cats,
+)
 from chia.wallet.lineage_proof import LineageProof
 from chia.wallet.puzzles.singleton_top_layer_v1_1 import (
     puzzle_for_singleton,
@@ -412,6 +417,175 @@ def build_tracker_execute_coin_spend(
         lineage_proof, uint64(tracker_coin.amount), inner_solution
     )
     return make_spend(tracker_coin, full_puzzle, full_solution)
+
+
+# ── Tracker VOTE coin spend (singleton-wrapped) ─────────────────────────────
+def build_tracker_vote_coin_spend(
+    *,
+    tracker_coin: Coin,
+    tracker_inner_puzzle: Program,
+    tracker_launcher_id: bytes32,
+    lineage_proof: LineageProof,
+    voter_inner_puzzle_hash: bytes32,
+    additional_vote_amount: int,
+) -> CoinSpend:
+    """Singleton-wrapped VOTE spend for the governance proposal tracker.
+
+    ``tracker_inner_puzzle`` must already be curried into its OPEN state — an
+    active proposal whose ``PROPOSAL_HASH``, ``BILL_OPERATION``, ``VOTE_TALLY``,
+    and ``VOTING_DEADLINE`` are non-zero.  VOTE increases ``VOTE_TALLY`` by
+    ``additional_vote_amount`` and recreates the tracker singleton in its new
+    OPEN state.  The spend asserts the PGT lock announcement for
+    ``(voter_inner_puzzle_hash, PROPOSAL_HASH, additional_vote_amount,
+    VOTING_DEADLINE)``, so the co-spent PGT free coin MUST emit that exact
+    announcement (see :func:`build_pgt_lock_coin_spend`).
+
+    The inner solution shape mirrors ``governance_singleton_inner.clsp``'s
+    dispatcher: ``(my_id my_inner_puzzlehash my_amount TRK_VOTE
+    (voter_inner_puzhash additional_vote_amount))``.
+
+    The two amount values (``additional_vote_amount`` here and the PGT lock
+    ``my_amount``) MUST match — the on-chain announcement-id pairing enforces
+    this.
+
+    Args:
+        tracker_coin: The current tracker singleton coin in OPEN state.
+        tracker_inner_puzzle: The OPEN-state curried tracker inner puzzle.
+        tracker_launcher_id: The tracker singleton's launcher id.
+        lineage_proof: The lineage proof of ``tracker_coin``'s parent.
+        voter_inner_puzzle_hash: The voter's inner puzzle hash — MUST match
+            the PGT free coin's owner curry (so the LOCK announcement is
+            produced by that user's PGT coin and not somebody else's).
+        additional_vote_amount: The PGT mojos being locked to add weight to
+            the proposal.  MUST be > 0 and MUST equal the co-spent PGT free
+            coin's amount (LOCK is a full-coin operation).
+
+    Returns:
+        A ``CoinSpend`` ready to bundle with the matching PGT lock spend and
+        push through the mempool.
+    """
+    if len(voter_inner_puzzle_hash) != 32:
+        raise ValueError("voter_inner_puzzle_hash must be 32 bytes")
+    if additional_vote_amount <= 0:
+        raise ValueError("additional_vote_amount must be > 0")
+    inner_solution = Program.to(
+        [
+            tracker_coin.name(),
+            tracker_inner_puzzle.get_tree_hash(),
+            tracker_coin.amount,
+            TRK_VOTE,
+            [voter_inner_puzzle_hash, additional_vote_amount],
+        ]
+    )
+    full_puzzle = puzzle_for_singleton(tracker_launcher_id, tracker_inner_puzzle)
+    full_solution = solution_for_singleton(
+        lineage_proof, uint64(tracker_coin.amount), inner_solution
+    )
+    return make_spend(tracker_coin, full_puzzle, full_solution)
+
+
+# ── PGT LOCK coin spend (CAT2-wrapped pgt_free_inner) ────────────────────────
+def build_pgt_lock_coin_spend(
+    *,
+    pgt_coin: Coin,
+    voter_inner_puzzle: Program,
+    voter_inner_solution: Program,
+    proposal_tracker_struct: Program,
+    pgt_tail_hash: bytes32,
+    lineage_proof: LineageProof,
+    proposal_hash: bytes32,
+    deadline: int,
+) -> CoinSpend:
+    """CAT2-wrapped pgt_free_inner LOCK CoinSpend.
+
+    Builds the on-chain spend of a free PGT coin owned by ``voter_inner_puzzle``
+    that locks ``pgt_coin.amount`` PGT mojos to ``proposal_hash`` until
+    ``deadline`` (absolute seconds).  The spend emits the LOCK announcement
+    the governance tracker's PROPOSE/VOTE handler asserts.
+
+    The voter's ``voter_inner_puzzle`` retains full authority over what the
+    LOCK destination looks like — the only constraint is that running it on
+    ``voter_inner_solution`` must yield a single ``CREATE_COIN`` whose
+    puzzle hash equals the canonical ``pgt_locked_inner`` puzhash for
+    ``(proposal_tracker_struct, voter_inner_puzzle_hash, proposal_hash,
+    deadline)`` and whose amount equals ``pgt_coin.amount``.  Any other
+    inner conditions (e.g. ``AGG_SIG_ME`` for the wallet's signature) pass
+    through unchanged.
+
+    LOCK is a full-coin operation: ``extra_delta = 0`` so the CAT2
+    conservation invariant holds without melting supply.  Callers that want
+    to lock less than their full PGT coin must split it first via a
+    TRANSFER spend.
+
+    Args:
+        pgt_coin: The free PGT coin to lock.  Its puzzle hash MUST equal
+            ``cat_pgt_free_puzzle_hash(...)`` with the same
+            ``proposal_tracker_struct``, ``pgt_tail_hash``, and
+            ``voter_inner_puzzle.get_tree_hash()``.
+        voter_inner_puzzle: The reveal of the PGT owner's inner puzzle
+            (e.g. ``p2_delegated_puzzle_or_hidden_puzzle``).  Its tree hash
+            MUST equal the ``INNER_PUZZLE_HASH`` curried into the PGT free
+            inner that produced ``pgt_coin``.
+        voter_inner_solution: The owner's signed inner solution.  It must
+            yield exactly one ``CREATE_COIN`` to the canonical locked
+            puzhash with ``amount == pgt_coin.amount``.
+        proposal_tracker_struct: Singleton struct of the governance tracker
+            (same one curried into the PGT inner mods).
+        pgt_tail_hash: Tree hash of the curried PGT TAIL (CAT2's
+            ``limitations_program_hash``).
+        lineage_proof: Lineage proof of the PGT coin's parent (so the CAT2
+            outer can verify the lineage chain back to the issuance).
+        proposal_hash: 32-byte ``sha256tree(bill_operation)`` of the open
+            proposal we're voting on.
+        deadline: Absolute seconds (uint64) of the proposal's voting
+            deadline.  The LOCK spend asserts
+            ``ASSERT_BEFORE_SECONDS_ABSOLUTE deadline``, so the locking
+            block's timestamp must be strictly less than ``deadline``.
+
+    Returns:
+        A single ``CoinSpend`` (the CAT2-wrapped PGT free coin spend).  The
+        caller bundles this with the matching tracker PROPOSE/VOTE spend
+        and any lineage-providing parent spends, then asks the wallet to
+        sign for the inner ``AGG_SIG_ME`` conditions and pushes the bundle.
+    """
+    if len(proposal_hash) != 32:
+        raise ValueError("proposal_hash must be 32 bytes")
+    if not isinstance(deadline, int) or deadline < 0 or deadline > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError("deadline must be a uint64")
+
+    pgt_locked_mod_h = bytes32(pgt_locked_inner_mod().get_tree_hash())
+    voter_inner_ph = bytes32(voter_inner_puzzle.get_tree_hash())
+    free_inner = pgt_free_inner_puzzle(
+        pgt_locked_mod_h, proposal_tracker_struct, voter_inner_ph
+    )
+
+    # pgt_free_inner solution shape:
+    #   (spend_case inner_puzzle inner_solution case_args)
+    # case_args for LOCK: (proposal_hash deadline my_amount)
+    free_inner_solution = Program.to(
+        [
+            PGT_LOCK,
+            voter_inner_puzzle,
+            voter_inner_solution,
+            [proposal_hash, deadline, pgt_coin.amount],
+        ]
+    )
+
+    spendable = SpendableCAT(
+        coin=pgt_coin,
+        limitations_program_hash=pgt_tail_hash,
+        inner_puzzle=free_inner,
+        inner_solution=free_inner_solution,
+        lineage_proof=lineage_proof,
+        extra_delta=0,
+    )
+    bundle = unsigned_spend_bundle_for_spendable_cats(CAT_MOD, [spendable])
+    if len(bundle.coin_spends) != 1:
+        raise RuntimeError(
+            f"unsigned_spend_bundle_for_spendable_cats returned "
+            f"{len(bundle.coin_spends)} spends, expected 1"
+        )
+    return bundle.coin_spends[0]
 
 
 # ── CAT-wrapped PGT helpers (for tests / drivers building announcements) ─────
